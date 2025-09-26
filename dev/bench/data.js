@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1756922325825,
+  "lastUpdate": 1758914050098,
   "repoUrl": "https://github.com/XiangpengHao/congee",
   "entries": {
     "Congee basic op performance": [
@@ -7604,6 +7604,45 @@ window.BENCHMARK_DATA = {
           {
             "name": "ReadOnly",
             "value": 9399014,
+            "unit": "QPS"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "guthijp.reddy@gmail.com",
+            "name": "JP Reddy",
+            "username": "JP-Reddy"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c64633e8cd108a2663b8a34b1c57e147a164d7c7",
+          "message": "Improve memory efficiency of CongeeCompactSet  (#35)\n\n* use straight line concept to compress N256 internal child offsets data\n\n* n48 internal optimization: convert key byte array to bitmap and use simd for offset calculation\n\n* n48 internal optimization: store precomputed popcount values along with bitmap\n\n* use u8 for precomputed values instead of u32 in n48 internal\n\n* fit node type and prefix len in one byte\n\n* fit chilren_len in one byte instead of 2 + code cleanup\n\n* clippy + fmt\n\n* cleanup\n\n* add comments + cleanup",
+          "timestamp": "2025-09-26T14:11:22-05:00",
+          "tree_id": "93202dc08079f2273f12579586683217cc0b1138",
+          "url": "https://github.com/XiangpengHao/congee/commit/c64633e8cd108a2663b8a34b1c57e147a164d7c7"
+        },
+        "date": 1758914049603,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "ScanOnly",
+            "value": 2760572,
+            "unit": "QPS"
+          },
+          {
+            "name": "ReadOnly",
+            "value": 8238245,
+            "unit": "QPS"
+          },
+          {
+            "name": "UpdateOnly",
+            "value": 16803355,
             "unit": "QPS"
           }
         ]
