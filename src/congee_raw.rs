@@ -11,9 +11,9 @@ pub struct CongeeRaw<
     usize: From<K>,
     usize: From<V>,
 {
-    inner: CongeeInner<8, A>,
-    pt_key: PhantomData<K>,
-    pt_val: PhantomData<V>,
+    pub(crate) inner: CongeeInner<8, A>,
+    pub(crate) pt_key: PhantomData<K>,
+    pub(crate) pt_val: PhantomData<V>,
 }
 
 impl<K: Copy + From<usize>, V: Copy + From<usize>> Default for CongeeRaw<K, V>

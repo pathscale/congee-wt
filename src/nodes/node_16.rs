@@ -101,6 +101,17 @@ impl Node for Node16 {
         NodeType::N16
     }
 
+    fn topology_children(&self) -> Vec<(u8, u16, NodePtr)> {
+        (0..self.base.meta.count())
+            .map(|slot| (self.keys[slot], slot as u16, self.children[slot]))
+            .collect()
+    }
+
+    fn restore_topology_branch(&mut self, key: u8, slot: u16, child: NodePtr) {
+        assert_eq!(slot as usize, self.base.meta.count());
+        self.insert(key, child);
+    }
+
     fn get_children(&self, start: u8, end: u8) -> NodeIter<'_> {
         if self.base.meta.count() == 0 {
             // FIXME: the node may be empty due to deletion, this is not intended, we should fix the delete logic

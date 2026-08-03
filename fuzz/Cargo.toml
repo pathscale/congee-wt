@@ -14,6 +14,7 @@ arbitrary = { version = "1", features = ["derive"] }
 
 [dependencies.congee]
 path = ".."
+package = "congee-wt"
 
 [[bin]]
 name = "btree_check"
