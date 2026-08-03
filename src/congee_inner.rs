@@ -109,10 +109,23 @@ impl<const K_LEN: usize, A: Allocator + Clone + Send> CongeeInner<K_LEN, A> {
     }
 
     #[inline]
-    fn load_root(&self) -> NonNull<BaseNode> {
+    pub(crate) fn load_root(&self) -> NonNull<BaseNode> {
         let root_ptr = self.root.load(std::sync::atomic::Ordering::Relaxed);
         // SAFETY: The root pointer is always non-null after initialization.
         unsafe { NonNull::new_unchecked(root_ptr) }
+    }
+
+    pub(crate) fn from_root(
+        root: NonNull<BaseNode>,
+        allocator: A,
+        drain_callback: Arc<dyn Fn([u8; K_LEN], usize)>,
+    ) -> Self {
+        Self {
+            root: AtomicPtr::new(root.as_ptr()),
+            drain_callback,
+            allocator,
+            _pt_key: PhantomData,
+        }
     }
 }
 

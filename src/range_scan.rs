@@ -60,8 +60,8 @@ impl<'a, const K_LEN: usize> RangeScan<'a, K_LEN> {
         loop {
             let prefix_check_result = self.check_prefix_equals(node.as_ref(), &mut key_tracker);
 
-            if parent_node.is_some() {
-                parent_node.as_ref().unwrap().check_version()?;
+            if let Some(parent_node) = &parent_node {
+                parent_node.check_version()?;
             }
 
             node.check_version()?;

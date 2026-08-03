@@ -41,6 +41,15 @@ pub(crate) enum NodeType {
 }
 
 impl NodeType {
+    pub(crate) const fn capacity(self) -> usize {
+        match self {
+            NodeType::N4 => 4,
+            NodeType::N16 => 16,
+            NodeType::N48 => 48,
+            NodeType::N256 => 256,
+        }
+    }
+
     pub(crate) fn node_layout(&self) -> std::alloc::Layout {
         match *self {
             NodeType::N4 => std::alloc::Layout::from_size_align(
@@ -77,6 +86,14 @@ pub(crate) trait Node {
     fn remove(&mut self, k: u8);
     fn copy_to<N: Node>(&self, dst: &mut N);
     fn get_type() -> NodeType;
+    fn topology_children(&self) -> Vec<(u8, u16, NodePtr)>;
+    fn topology_free_slots(&self) -> Vec<u8> {
+        Vec::new()
+    }
+    fn restore_topology_branch(&mut self, key: u8, slot: u16, child: NodePtr);
+    fn restore_topology_finish(&mut self, free_slots: &[u8]) {
+        assert!(free_slots.is_empty());
+    }
 }
 
 pub(crate) enum NodeIter<'a> {
@@ -194,9 +211,13 @@ macro_rules! gen_method_mut {
 
 gen_method!(get_child, (k: u8), Option<NodePtr>);
 gen_method!(get_children, (start: u8, end: u8), NodeIter<'_>);
+gen_method!(topology_children, (), Vec<(u8, u16, NodePtr)>);
+gen_method!(topology_free_slots, (), Vec<u8>);
 
 gen_method_mut!(change, (key: u8, val: NodePtr), NodePtr);
 gen_method_mut!(remove, (key: u8), ());
+gen_method_mut!(restore_topology_branch, (key: u8, slot: u16, child: NodePtr), ());
+gen_method_mut!(restore_topology_finish, (free_slots: &[u8]), ());
 
 impl BaseNode {
     pub(crate) fn new(n_type: NodeType, prefix: &[u8]) -> Self {
@@ -242,6 +263,26 @@ impl BaseNode {
                 NonNull::new(base_ptr as *mut N).unwrap(),
                 allocator,
             ))
+        }
+    }
+
+    pub(crate) fn make_topology_node<A: Allocator>(
+        kind: NodeType,
+        prefix: &[u8],
+        allocator: &A,
+    ) -> Result<NonNull<BaseNode>, ArtError> {
+        macro_rules! make {
+            ($node:ty) => {
+                Self::make_node::<$node, A>(prefix, allocator)
+                    .map(|node| node.into_non_null().cast::<BaseNode>())
+            };
+        }
+
+        match kind {
+            NodeType::N4 => make!(Node4),
+            NodeType::N16 => make!(Node16),
+            NodeType::N48 => make!(Node48),
+            NodeType::N256 => make!(Node256),
         }
     }
 

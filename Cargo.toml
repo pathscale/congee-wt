@@ -1,13 +1,17 @@
 [package]
-name = "congee"
+name = "congee-wt"
 version = "0.4.1"
 edition = "2024"
 description = "A Rust implementation of ART-OLC concurrent adaptive radix tree."
 keywords = ["ART", "adaptive-radix-tree", "concurrent"]
-repository = "https://github.com/XiangpengHao/congee"
+repository = "https://github.com/pathscale/congee-wt"
 readme = "README.md"
 authors = ["Xiangpeng Hao <haoxiangpeng123@gmail.com>"]
 license = "MIT"
+
+[lib]
+name = "congee"
+path = "src/lib.rs"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

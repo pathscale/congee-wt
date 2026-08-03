@@ -13,6 +13,7 @@ mod lock;
 mod nodes;
 mod range_scan;
 mod stats;
+pub mod topology;
 mod utils;
 use congee_inner::CongeeInner;
 

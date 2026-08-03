@@ -74,6 +74,18 @@ impl Node for Node256 {
         NodeType::N256
     }
 
+    fn topology_children(&self) -> Vec<(u8, u16, NodePtr)> {
+        (u8::MIN..=u8::MAX)
+            .filter(|key| self.get_mask(*key as usize))
+            .map(|key| (key, key as u16, self.children[key as usize]))
+            .collect()
+    }
+
+    fn restore_topology_branch(&mut self, key: u8, slot: u16, child: NodePtr) {
+        assert_eq!(slot, key as u16);
+        self.insert(key, child);
+    }
+
     fn get_children(&self, start: u8, end: u8) -> NodeIter<'_> {
         NodeIter::N256(Node256Iter {
             start,

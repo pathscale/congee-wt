@@ -47,6 +47,17 @@ impl Node for Node4 {
         NodeType::N4
     }
 
+    fn topology_children(&self) -> Vec<(u8, u16, NodePtr)> {
+        (0..self.base.meta.count())
+            .map(|slot| (self.keys[slot], slot as u16, self.children[slot]))
+            .collect()
+    }
+
+    fn restore_topology_branch(&mut self, key: u8, slot: u16, child: NodePtr) {
+        assert_eq!(slot as usize, self.base.meta.count());
+        self.insert(key, child);
+    }
+
     fn remove(&mut self, k: u8) {
         if let Some(pos) = self.keys.iter().position(|&key| key == k) {
             self.keys.copy_within(pos + 1..self.base.meta.count(), pos);

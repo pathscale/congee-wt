@@ -66,6 +66,46 @@ impl Node for Node48 {
         NodeType::N48
     }
 
+    fn topology_children(&self) -> Vec<(u8, u16, NodePtr)> {
+        self.child_idx
+            .iter()
+            .enumerate()
+            .filter(|(_, slot)| **slot != EMPTY_MARKER)
+            .map(|(key, slot)| (key as u8, *slot as u16, self.children[*slot as usize]))
+            .collect()
+    }
+
+    fn topology_free_slots(&self) -> Vec<u8> {
+        let mut free = Vec::with_capacity(48 - self.base.meta.count());
+        let mut slot = self.next_empty;
+        while slot < EMPTY_MARKER {
+            assert!(!free.contains(&slot), "Node48 free-list cycle");
+            free.push(slot);
+            slot = cast_ptr!(self.children[slot as usize] => {
+                Payload(next) => next as u8,
+                SubNode(_) => unreachable!("free Node48 slot contains a node"),
+            });
+        }
+        free
+    }
+
+    fn restore_topology_branch(&mut self, key: u8, slot: u16, child: NodePtr) {
+        let slot = slot as usize;
+        assert!(slot < 48);
+        assert_eq!(self.child_idx[key as usize], EMPTY_MARKER);
+        self.child_idx[key as usize] = slot as u8;
+        self.children[slot] = child;
+        self.base.meta.inc_count();
+    }
+
+    fn restore_topology_finish(&mut self, free_slots: &[u8]) {
+        self.next_empty = free_slots.first().copied().unwrap_or(EMPTY_MARKER);
+        for (index, slot) in free_slots.iter().copied().enumerate() {
+            let next = free_slots.get(index + 1).copied().unwrap_or(EMPTY_MARKER);
+            self.children[slot as usize] = NodePtr::from_payload(next as usize);
+        }
+    }
+
     fn remove(&mut self, k: u8) {
         debug_assert!(self.child_idx[k as usize] != EMPTY_MARKER);
         let pos = self.child_idx[k as usize];
