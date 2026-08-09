@@ -144,7 +144,6 @@ impl<const K_LEN: usize, A: Allocator + Clone + Send> CongeeInner<K_LEN, A> {
 
     #[inline]
     pub(crate) fn get(&self, key: &[u8; K_LEN], _guard: &Guard) -> Option<usize> {
-        let mut confirm_absence = false;
         'outer: loop {
             let mut level = 0;
 
@@ -152,18 +151,12 @@ impl<const K_LEN: usize, A: Allocator + Clone + Send> CongeeInner<K_LEN, A> {
             let mut node = if let Ok(v) = BaseNode::read_lock(root) {
                 v
             } else {
-                confirm_absence = false;
                 continue;
             };
 
             loop {
                 let Some(next_level) = node.as_ref().check_prefix(key, level) else {
                     if node.check_version().is_err() {
-                        confirm_absence = false;
-                        continue 'outer;
-                    }
-                    if !confirm_absence {
-                        confirm_absence = true;
                         continue 'outer;
                     }
                     return None;
@@ -173,33 +166,34 @@ impl<const K_LEN: usize, A: Allocator + Clone + Send> CongeeInner<K_LEN, A> {
                 let child_node = node
                     .as_ref()
                     .get_child(unsafe { *key.get_unchecked(level) });
-                if node.check_version().is_err() {
-                    confirm_absence = false;
-                    continue 'outer;
-                }
-
                 let child_node = match child_node {
                     Some(child_node) => child_node,
-                    None if !confirm_absence => {
-                        confirm_absence = true;
-                        continue 'outer;
+                    None => {
+                        if node.check_version().is_err() {
+                            continue 'outer;
+                        }
+                        return None;
                     }
-                    None => return None,
                 };
 
                 cast_ptr!(child_node => {
                     Payload(tid) => {
+                        if node.check_version().is_err() {
+                            continue 'outer;
+                        }
                         return Some(tid);
                     },
                     SubNode(sub_node) => {
-                        level += 1;
-
-                        node = if let Ok(n) = BaseNode::read_lock(sub_node) {
-                            n
+                        let next_node = if let Ok(next_node) = BaseNode::read_lock(sub_node) {
+                            next_node
                         } else {
-                            confirm_absence = false;
                             continue 'outer;
                         };
+                        if node.check_version().is_err() {
+                            continue 'outer;
+                        }
+                        level += 1;
+                        node = next_node;
                     }
                 });
             }
@@ -554,15 +548,17 @@ impl<const K_LEN: usize, A: Allocator + Clone + Send> CongeeInner<K_LEN, A> {
             node_key = k[level];
 
             let child_node = node.as_ref().get_child(node_key);
-            node.check_version()?;
-
             let child_node = match child_node {
                 Some(n) => n,
-                None => return Ok(None),
+                None => {
+                    node.check_version()?;
+                    return Ok(None);
+                }
             };
 
             cast_ptr!(child_node => {
                 Payload(tid) => {
+                    node.check_version()?;
                     let new_v = remapping_function(tid);
 
                     match new_v {
@@ -606,9 +602,11 @@ impl<const K_LEN: usize, A: Allocator + Clone + Send> CongeeInner<K_LEN, A> {
                     }
                 },
                 SubNode(sub_node) => {
+                    let next_node = BaseNode::read_lock(sub_node)?;
+                    node.check_version()?;
                     level += 1;
                     parent = Some((node, node_key));
-                    node = BaseNode::read_lock(sub_node)?;
+                    node = next_node;
                 }
             });
         }
