@@ -144,6 +144,7 @@ impl<const K_LEN: usize, A: Allocator + Clone + Send> CongeeInner<K_LEN, A> {
 
     #[inline]
     pub(crate) fn get(&self, key: &[u8; K_LEN], _guard: &Guard) -> Option<usize> {
+        let mut confirm_absence = false;
         'outer: loop {
             let mut level = 0;
 
@@ -151,12 +152,18 @@ impl<const K_LEN: usize, A: Allocator + Clone + Send> CongeeInner<K_LEN, A> {
             let mut node = if let Ok(v) = BaseNode::read_lock(root) {
                 v
             } else {
+                confirm_absence = false;
                 continue;
             };
 
             loop {
                 let Some(next_level) = node.as_ref().check_prefix(key, level) else {
                     if node.check_version().is_err() {
+                        confirm_absence = false;
+                        continue 'outer;
+                    }
+                    if !confirm_absence {
+                        confirm_absence = true;
                         continue 'outer;
                     }
                     return None;
@@ -167,10 +174,18 @@ impl<const K_LEN: usize, A: Allocator + Clone + Send> CongeeInner<K_LEN, A> {
                     .as_ref()
                     .get_child(unsafe { *key.get_unchecked(level) });
                 if node.check_version().is_err() {
+                    confirm_absence = false;
                     continue 'outer;
                 }
 
-                let child_node = child_node?;
+                let child_node = match child_node {
+                    Some(child_node) => child_node,
+                    None if !confirm_absence => {
+                        confirm_absence = true;
+                        continue 'outer;
+                    }
+                    None => return None,
+                };
 
                 cast_ptr!(child_node => {
                     Payload(tid) => {
@@ -182,6 +197,7 @@ impl<const K_LEN: usize, A: Allocator + Clone + Send> CongeeInner<K_LEN, A> {
                         node = if let Ok(n) = BaseNode::read_lock(sub_node) {
                             n
                         } else {
+                            confirm_absence = false;
                             continue 'outer;
                         };
                     }
