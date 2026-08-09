@@ -5,7 +5,7 @@ use shuttle::thread;
 use std::thread;
 
 use crate::congee_inner::CongeeInner;
-use std::sync::Arc;
+use std::sync::{Arc, Barrier, Mutex};
 
 #[test]
 fn small_insert() {
@@ -225,6 +225,47 @@ fn test_concurrent_insert_read() {
 
     drop(guard);
     drop(tree);
+}
+
+#[test]
+fn inserted_key_is_immediately_visible_during_disjoint_churn() {
+    let tree = Arc::new(CongeeInner::default());
+    let barrier = Arc::new(Barrier::new(9));
+    let mutation = Arc::new(Mutex::new(()));
+    let mut handlers = Vec::new();
+
+    for worker in 0..8usize {
+        let tree = Arc::clone(&tree);
+        let barrier = Arc::clone(&barrier);
+        let mutation = Arc::clone(&mutation);
+        handlers.push(thread::spawn(move || {
+            let guard = crossbeam_epoch::pin();
+            barrier.wait();
+            for sequence in 0..10_000usize {
+                let value = worker * 10_000 + sequence;
+                let key = value.to_be_bytes();
+                {
+                    let _mutation = mutation.lock().unwrap();
+                    assert_eq!(tree.insert(&key, value, &guard).unwrap(), None);
+                }
+                assert_eq!(tree.get(&key, &guard), Some(value));
+                {
+                    let _mutation = mutation.lock().unwrap();
+                    assert_eq!(
+                        tree.compute_if_present(&key, &mut |_| None, &guard),
+                        Some((value, None))
+                    );
+                }
+            }
+        }));
+    }
+
+    barrier.wait();
+    for handler in handlers {
+        handler.join().unwrap();
+    }
+    let guard = crossbeam_epoch::pin();
+    assert_eq!(tree.value_count(&guard), 0);
 }
 
 #[cfg(all(feature = "shuttle", test))]

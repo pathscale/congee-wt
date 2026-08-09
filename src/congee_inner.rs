@@ -155,7 +155,13 @@ impl<const K_LEN: usize, A: Allocator + Clone + Send> CongeeInner<K_LEN, A> {
             };
 
             loop {
-                level = node.as_ref().check_prefix(key, level)?;
+                let Some(next_level) = node.as_ref().check_prefix(key, level) else {
+                    if node.check_version().is_err() {
+                        continue 'outer;
+                    }
+                    return None;
+                };
+                level = next_level;
 
                 let child_node = node
                     .as_ref()
@@ -521,10 +527,12 @@ impl<const K_LEN: usize, A: Allocator + Clone + Send> CongeeInner<K_LEN, A> {
         let mut node = BaseNode::read_lock(root)?;
 
         loop {
-            level = if let Some(v) = node.as_ref().check_prefix(k, level) {
-                v
-            } else {
-                return Ok(None);
+            level = match node.as_ref().check_prefix(k, level) {
+                Some(next_level) => next_level,
+                None => {
+                    node.check_version()?;
+                    return Ok(None);
+                }
             };
 
             node_key = k[level];
