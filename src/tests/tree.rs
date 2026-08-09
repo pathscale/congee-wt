@@ -246,7 +246,11 @@ fn inserted_key_is_immediately_visible_during_disjoint_churn() {
                 let key = value.to_be_bytes();
                 {
                     let _mutation = mutation.lock().unwrap();
-                    assert_eq!(tree.insert(&key, value, &guard).unwrap(), None);
+                    assert_eq!(
+                        tree.compute_or_insert(&key, &mut |old| old.unwrap_or(value), &guard)
+                            .unwrap(),
+                        None
+                    );
                 }
                 assert_eq!(tree.get(&key, &guard), Some(value));
                 {
