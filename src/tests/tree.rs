@@ -239,9 +239,13 @@ fn inserted_key_is_immediately_visible_during_disjoint_churn() {
         let barrier = Arc::clone(&barrier);
         let mutation = Arc::clone(&mutation);
         handlers.push(thread::spawn(move || {
-            let guard = crossbeam_epoch::pin();
+            let mut guard = crossbeam_epoch::pin();
             barrier.wait();
             for sequence in 0..10_000usize {
+                if sequence % 100 == 0 {
+                    guard = crossbeam_epoch::pin();
+                }
+
                 let value = worker * 10_000 + sequence;
                 let key = value.to_be_bytes();
                 {
