@@ -215,14 +215,13 @@ const SCAN_RACE_ROUNDS: usize = 3;
 #[cfg(not(all(feature = "shuttle", test)))]
 const SCAN_RACE_ROUNDS: usize = 100_000;
 
-/// Upper bound on reader scans. Under shuttle the reader must not spin until
-/// the writer finishes: the done flag is a plain atomic the scheduler cannot
-/// see, so an unfair schedule would blow the max_steps bound. Natively the
-/// reader keeps scanning until the writer is done.
+/// Upper bound on reader scans, applied only under shuttle: the reader must
+/// not spin until the writer finishes there, because the done flag is a plain
+/// atomic the scheduler cannot see, so an unfair schedule would blow the
+/// max_steps bound. Natively the reader keeps scanning until the writer is
+/// done and no cap applies.
 #[cfg(all(feature = "shuttle", test))]
 const SCAN_RACE_READER_CAP: usize = 8;
-#[cfg(not(all(feature = "shuttle", test)))]
-const SCAN_RACE_READER_CAP: usize = usize::MAX;
 
 /// A range scan racing inserts into the very node it descends through must
 /// never report an empty (or partial) range while the scanned keys are present
@@ -248,7 +247,7 @@ fn test_scan_racing_same_node_insert() {
         thread::spawn(move || {
             let mut guard = crossbeam_epoch::pin();
             for i in 0..SCAN_RACE_ROUNDS {
-                if i % 128 == 0 {
+                if i.is_multiple_of(128) {
                     guard = crossbeam_epoch::pin();
                 }
                 for a in [0x01usize, 0x03] {
@@ -274,10 +273,14 @@ fn test_scan_racing_same_node_insert() {
             let high: [u8; 8] = 0x0203usize.to_be_bytes();
             let mut rounds = 0usize;
             loop {
-                let finished = done.load(std::sync::atomic::Ordering::Acquire)
-                    || rounds >= SCAN_RACE_READER_CAP;
+                #[allow(unused_mut)]
+                let mut finished = done.load(std::sync::atomic::Ordering::Acquire);
+                #[cfg(all(feature = "shuttle", test))]
+                {
+                    finished = finished || rounds >= SCAN_RACE_READER_CAP;
+                }
                 rounds += 1;
-                if rounds % 128 == 0 {
+                if rounds.is_multiple_of(128) {
                     guard = crossbeam_epoch::pin();
                 }
                 let mut results = [([0u8; 8], 0usize); 4];

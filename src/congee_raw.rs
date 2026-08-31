@@ -192,7 +192,9 @@ where
     pub fn insert(&self, k: K, v: V, guard: &epoch::Guard) -> Result<Option<V>, OOMError> {
         let key = usize::from(k);
         let key: [u8; 8] = key.to_be_bytes();
-        let val = self.inner.insert(&key, check_payload(usize::from(v)), guard);
+        let val = self
+            .inner
+            .insert(&key, check_payload(usize::from(v)), guard);
         val.map(|inner| inner.map(|v| V::from(v)))
     }
 
