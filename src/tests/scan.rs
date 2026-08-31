@@ -1,4 +1,9 @@
 use std::sync::Arc;
+
+#[cfg(all(feature = "shuttle", test))]
+use shuttle::thread;
+
+#[cfg(not(all(feature = "shuttle", test)))]
 use std::thread;
 
 use crate::congee_inner::CongeeInner;
@@ -199,6 +204,67 @@ fn test_insert_and_scan() {
         let val = tree.get(&key, &guard).unwrap();
         assert_eq!(val, *v);
     }
+}
+
+/// A range scan racing inserts into the very node it descends through must
+/// never report an empty (or partial) range while the scanned keys are present
+/// the whole time. The inserts below land in the same node the scan probes
+/// during its single-child descent, shifting the node's key array under it.
+#[test]
+fn test_scan_racing_same_node_insert() {
+    let tree = Arc::new(CongeeInner::<8>::default());
+
+    {
+        let guard = crossbeam_epoch::pin();
+        for k in [0x0201usize, 0x0202] {
+            tree.insert(&k.to_be_bytes(), k, &guard).unwrap();
+        }
+    }
+
+    let writer = {
+        let tree = tree.clone();
+        thread::spawn(move || {
+            let guard = crossbeam_epoch::pin();
+            for a in [0x01usize, 0x03, 0x04] {
+                let k = (a << 8) | 0x01;
+                tree.insert(&k.to_be_bytes(), k, &guard).unwrap();
+            }
+        })
+    };
+
+    let reader = {
+        let tree = tree.clone();
+        thread::spawn(move || {
+            let guard = crossbeam_epoch::pin();
+            let low: [u8; 8] = 0x0201usize.to_be_bytes();
+            let high: [u8; 8] = 0x0203usize.to_be_bytes();
+            for _ in 0..3 {
+                let mut results = [([0u8; 8], 0usize); 4];
+                let scanned = tree.range(&low, &high, &mut results, &guard);
+                assert_eq!(
+                    scanned, 2,
+                    "scan lost keys that were present for the whole run"
+                );
+                assert_eq!(results[0].1, 0x0201);
+                assert_eq!(results[1].1, 0x0202);
+            }
+        })
+    };
+
+    writer.join().unwrap();
+    reader.join().unwrap();
+}
+
+#[cfg(all(feature = "shuttle", test))]
+#[test]
+fn shuttle_scan_insert_race() {
+    let config = shuttle::Config::default();
+    let mut runner = shuttle::PortfolioRunner::new(true, config);
+    runner.add(shuttle::scheduler::PctScheduler::new(3, 2_000));
+    runner.add(shuttle::scheduler::PctScheduler::new(15, 2_000));
+    runner.add(shuttle::scheduler::PctScheduler::new(40, 2_000));
+
+    runner.run(test_scan_racing_same_node_insert);
 }
 
 #[test]

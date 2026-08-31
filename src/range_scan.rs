@@ -113,6 +113,11 @@ impl<'a, const K_LEN: usize> RangeScan<'a, K_LEN> {
                         let next_node_tmp = if let Some(n) = node.as_ref().get_child(start_level) {
                             n
                         } else {
+                            // A miss must be validated like a hit: a concurrent insert into
+                            // this node can shift the key array while we probe it, so an
+                            // unvalidated miss would report an empty range for keys that
+                            // are present the whole time.
+                            node.check_version()?;
                             return Ok(0);
                         };
                         node.check_version()?;
