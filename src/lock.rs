@@ -95,11 +95,12 @@ impl<'a> ReadGuard<'a> {
     }
 
     pub(crate) fn check_version(&self) -> Result<u32, ArtError> {
-        // Seqlock reader pattern: the Acquire fence keeps the preceding data
-        // loads from sinking below this re-validation load (a plain Acquire
-        // load only orders later accesses, not earlier ones).
+        // Seqlock reader pattern (as in crossbeam's AtomicCell validate_read):
+        // the Acquire fence keeps the preceding data loads from sinking below
+        // the re-validation load, so the load itself carries no ordering duty
+        // and can be Relaxed; nothing after it depends on it for ordering.
         fence(Ordering::Acquire);
-        let v = self.as_ref().version_lock_obsolete.load(Ordering::Acquire);
+        let v = self.as_ref().version_lock_obsolete.load(Ordering::Relaxed);
 
         if v == self.version {
             Ok(v)
