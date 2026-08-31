@@ -206,10 +206,29 @@ fn test_insert_and_scan() {
     }
 }
 
+/// How many insert/remove rounds the writer performs in the scan-vs-insert
+/// race test. Shuttle explores schedules, so a few rounds suffice there; the
+/// native run relies on real parallelism and needs volume to hit the narrow
+/// torn-read window in the node's key array.
+#[cfg(all(feature = "shuttle", test))]
+const SCAN_RACE_ROUNDS: usize = 3;
+#[cfg(not(all(feature = "shuttle", test)))]
+const SCAN_RACE_ROUNDS: usize = 100_000;
+
+/// Upper bound on reader scans. Under shuttle the reader must not spin until
+/// the writer finishes: the done flag is a plain atomic the scheduler cannot
+/// see, so an unfair schedule would blow the max_steps bound. Natively the
+/// reader keeps scanning until the writer is done.
+#[cfg(all(feature = "shuttle", test))]
+const SCAN_RACE_READER_CAP: usize = 8;
+#[cfg(not(all(feature = "shuttle", test)))]
+const SCAN_RACE_READER_CAP: usize = usize::MAX;
+
 /// A range scan racing inserts into the very node it descends through must
 /// never report an empty (or partial) range while the scanned keys are present
-/// the whole time. The inserts below land in the same node the scan probes
-/// during its single-child descent, shifting the node's key array under it.
+/// the whole time. The writer churns sibling entries of the same node the scan
+/// probes during its single-child descent, shifting the node's key array under
+/// the probe (keys 0x0201/0x0202 are never touched and must always be found).
 #[test]
 fn test_scan_racing_same_node_insert() {
     let tree = Arc::new(CongeeInner::<8>::default());
@@ -221,24 +240,46 @@ fn test_scan_racing_same_node_insert() {
         }
     }
 
+    let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
     let writer = {
         let tree = tree.clone();
+        let done = done.clone();
         thread::spawn(move || {
-            let guard = crossbeam_epoch::pin();
-            for a in [0x01usize, 0x03, 0x04] {
-                let k = (a << 8) | 0x01;
-                tree.insert(&k.to_be_bytes(), k, &guard).unwrap();
+            let mut guard = crossbeam_epoch::pin();
+            for i in 0..SCAN_RACE_ROUNDS {
+                if i % 128 == 0 {
+                    guard = crossbeam_epoch::pin();
+                }
+                for a in [0x01usize, 0x03] {
+                    let k = (a << 8) | 0x01;
+                    tree.insert(&k.to_be_bytes(), k, &guard).unwrap();
+                }
+                for a in [0x01usize, 0x03] {
+                    let k = (a << 8) | 0x01;
+                    tree.compute_if_present(&k.to_be_bytes(), &mut |_| None, &guard)
+                        .unwrap();
+                }
             }
+            done.store(true, std::sync::atomic::Ordering::Release);
         })
     };
 
     let reader = {
         let tree = tree.clone();
+        let done = done.clone();
         thread::spawn(move || {
-            let guard = crossbeam_epoch::pin();
+            let mut guard = crossbeam_epoch::pin();
             let low: [u8; 8] = 0x0201usize.to_be_bytes();
             let high: [u8; 8] = 0x0203usize.to_be_bytes();
-            for _ in 0..3 {
+            let mut rounds = 0usize;
+            loop {
+                let finished = done.load(std::sync::atomic::Ordering::Acquire)
+                    || rounds >= SCAN_RACE_READER_CAP;
+                rounds += 1;
+                if rounds % 128 == 0 {
+                    guard = crossbeam_epoch::pin();
+                }
                 let mut results = [([0u8; 8], 0usize); 4];
                 let scanned = tree.range(&low, &high, &mut results, &guard);
                 assert_eq!(
@@ -247,6 +288,9 @@ fn test_scan_racing_same_node_insert() {
                 );
                 assert_eq!(results[0].1, 0x0201);
                 assert_eq!(results[1].1, 0x0202);
+                if finished {
+                    break;
+                }
             }
         })
     };
