@@ -22,6 +22,64 @@ unsafe fn arc_from_usize<V>(v: usize) -> Arc<V> {
     unsafe { Arc::from_raw(ptr) }
 }
 
+/// RAII owner of the one strong count staged for a candidate value that was
+/// handed to the tree but may not have been published.
+///
+/// The tree's insert/compute loops can end in three ways after a candidate
+/// was produced: the candidate was stored (the tree consumed the count), the
+/// tree returned the equal old value without writing (the count is claimed by
+/// the caller as the returned `Arc`), or the operation terminated without a
+/// final store (the key vanished during a retry, or allocation failed). Every
+/// successful return therefore leaves exactly one unclaimed count, which the
+/// wrapper claims after calling `disarm`; on the terminal paths the guard is
+/// still armed and its drop reclaims the staged count instead of leaking it.
+struct CandidateGuard<V> {
+    ptr: Option<usize>,
+    _marker: PhantomData<fn(V)>,
+}
+
+impl<V> CandidateGuard<V> {
+    fn new() -> Self {
+        Self {
+            ptr: None,
+            _marker: PhantomData,
+        }
+    }
+
+    /// Convert `arc` into a raw payload for the tree, taking ownership of one
+    /// strong count. A candidate staged by a previous (failed, therefore
+    /// unpublished) attempt is reclaimed first.
+    fn stage(&mut self, arc: Arc<V>) -> usize {
+        self.reclaim();
+        let ptr = Arc::into_raw(arc).expose_provenance();
+        self.ptr = Some(ptr);
+        ptr
+    }
+
+    /// Drop the staged count, if any. Only sound while the candidate is
+    /// unpublished, which the staging discipline guarantees.
+    fn reclaim(&mut self) {
+        if let Some(prev) = self.ptr.take() {
+            // Safety
+            // `prev` was produced by Arc::into_raw in `stage` and was not
+            // consumed by the tree.
+            drop(unsafe { arc_from_usize::<V>(prev) });
+        }
+    }
+
+    /// Give the staged count up: the operation succeeded, so it was consumed
+    /// by the tree or is about to be claimed as the returned old value.
+    fn disarm(&mut self) {
+        self.ptr = None;
+    }
+}
+
+impl<V> Drop for CandidateGuard<V> {
+    fn drop(&mut self) {
+        self.reclaim();
+    }
+}
+
 impl<K: From<usize> + Copy, V: Sync + Send + 'static> Default for Congee<K, V>
 where
     usize: From<K>,
@@ -201,12 +259,16 @@ where
         let key: [u8; 8] = usize_key.to_be_bytes();
 
         // Insertion
-        // 1. Get the pointer of the value, consume the Arc
+        // 1. Stage the value: convert to a raw pointer owned by the guard
         // 2. Insert the pointer into the tree
         // 3. If replaced an old value, construct an Arc from the old value and return it
-        let ptr_v = Arc::into_raw(val);
-        let ptr_usize = ptr_v.expose_provenance();
+        // On allocation failure the guard reclaims the staged count.
+        let mut candidate = CandidateGuard::new();
+        let ptr_usize = candidate.stage(val);
         let old = self.inner.insert(&key, ptr_usize, guard)?;
+        // Consumed: stored by the tree, or (re-inserting the already stored
+        // Arc) claimed below as the returned old value.
+        candidate.disarm();
         if let Some(v) = old {
             // Safety
             // The pointer was previously inserted with expose_provenance
@@ -263,35 +325,36 @@ where
     {
         let usize_key: usize = usize::from(key);
         let key: [u8; 8] = usize_key.to_be_bytes();
-        // The inner tree may call the closure several times when it retries on
-        // contention. Each call turns the produced value into a raw pointer,
-        // but only the pointer from the final, successful call is stored in
-        // the tree; reclaim the pointer of a failed attempt on the next call
-        // so its refcount is not leaked.
-        let mut pending_new: Option<usize> = None;
+        // The inner tree may call the closure several times when it retries
+        // on contention, and only the candidate of a final, storing call is
+        // consumed by the tree. The guard owns whichever candidate is staged;
+        // if the operation terminates without a store (e.g. a retry finds the
+        // key removed, so the closure is never called again), the guard
+        // reclaims the count instead of leaking it.
+        let mut candidate = CandidateGuard::new();
         let mut inner_f = |v: usize| {
-            if let Some(prev) = pending_new.take() {
-                // Safety
-                // The pointer was produced by Arc::into_raw in the previous
-                // (failed and therefore not stored) invocation below.
-                drop(unsafe { arc_from_usize::<V>(prev) });
-            }
             // Safety
             // The pointer was previously inserted with expose_provenance
             let owned = unsafe { arc_from_usize::<V>(v) };
             let owned_clone = owned.clone();
             let rt = f(owned_clone);
             _ = Arc::into_raw(owned);
-            if let Some(new) = rt {
-                let new_v = Arc::into_raw(new);
-                let new_ptr = new_v.expose_provenance();
-                pending_new = Some(new_ptr);
-                Some(new_ptr)
-            } else {
-                None
+            match rt {
+                Some(new) => Some(candidate.stage(new)),
+                None => {
+                    // Deletion: no candidate outstanding for this attempt.
+                    candidate.reclaim();
+                    None
+                }
             }
         };
-        let (old, _new) = self.inner.compute_if_present(&key, &mut inner_f, guard)?;
+        let result = self.inner.compute_if_present(&key, &mut inner_f, guard);
+        let (old, _new) = result?;
+        // Success leaves exactly one unclaimed strong count for `old`: the
+        // count the tree released by overwriting/removing the entry, or (for
+        // an identity update the tree skipped writing) the staged candidate
+        // itself. Disarm and claim it as the return value.
+        candidate.disarm();
         let old_owned = unsafe { arc_from_usize::<V>(old) };
         let delayed_v = old_owned.clone();
         guard.defer(move || {
@@ -446,16 +509,11 @@ where
         let usize_key = usize::from(key);
         let key_bytes: [u8; 8] = usize_key.to_be_bytes();
 
-        // See compute_if_present: reclaim the raw pointer produced by a failed
-        // (retried) invocation so its refcount is not leaked.
-        let mut pending_new: Option<usize> = None;
+        // See compute_if_present: the guard owns the staged candidate until
+        // the operation provably consumed it; a terminal failure (allocation
+        // error after the closure ran) reclaims it instead of leaking.
+        let mut candidate = CandidateGuard::new();
         let mut inner_f = |existing_ptr: Option<usize>| -> usize {
-            if let Some(prev) = pending_new.take() {
-                // Safety
-                // The pointer was produced by Arc::into_raw in the previous
-                // (failed and therefore not stored) invocation below.
-                drop(unsafe { arc_from_usize::<V>(prev) });
-            }
             let existing_arc = if let Some(ptr) = existing_ptr {
                 // Safety: The pointer was previously inserted with expose_provenance
                 let owned = unsafe { arc_from_usize::<V>(ptr) };
@@ -467,14 +525,17 @@ where
             };
 
             let new_arc = f(existing_arc);
-            let new_ptr = Arc::into_raw(new_arc).expose_provenance();
-            pending_new = Some(new_ptr);
-            new_ptr
+            candidate.stage(new_arc)
         };
 
         let old_ptr = self
             .inner
             .compute_or_insert(&key_bytes, &mut inner_f, guard)?;
+
+        // Success: the candidate was stored (fresh insert or replacement), or
+        // the tree skipped an identity write and the staged count is claimed
+        // below as the returned old value.
+        candidate.disarm();
 
         if let Some(ptr) = old_ptr {
             // There was an old value, return it
@@ -711,6 +772,135 @@ mod tests {
         assert_eq!(Arc::strong_count(&counter), 4);
         drop(removed);
         assert_eq!(Arc::strong_count(&counter), 3); // two in guard.
+    }
+
+    /// Push the epoch forward until deferred destructors have run and the
+    /// Arc's strong count settles at `expected`. Other tests running in
+    /// parallel can pin the epoch, so this polls instead of assuming a fixed
+    /// number of flushes suffices. Panics if the count never settles: a
+    /// leaked count keeps it above `expected` forever.
+    fn wait_for_count<T>(arc: &Arc<T>, expected: usize) {
+        for _ in 0..100_000 {
+            if Arc::strong_count(arc) == expected {
+                return;
+            }
+            crossbeam_epoch::pin().flush();
+            std::thread::yield_now();
+        }
+        assert_eq!(Arc::strong_count(arc), expected);
+    }
+
+    /// An identity update (the closure returns the very Arc that is stored)
+    /// is a no-op inside the tree; the candidate refcount produced for it must
+    /// not leak.
+    #[test]
+    fn test_compute_if_present_identity_no_leak() {
+        let tree: Congee<usize, String> = Congee::new();
+        let value = Arc::new(String::from("v"));
+        {
+            let guard = tree.pin();
+            tree.insert(1, value.clone(), &guard).unwrap();
+            for _ in 0..64 {
+                let old = tree.compute_if_present(1, Some, &guard).unwrap();
+                assert!(Arc::ptr_eq(&old, &value));
+            }
+        }
+        // One count here, one in the tree; every candidate count reclaimed.
+        wait_for_count(&value, 2);
+    }
+
+    /// Same as above through compute_or_insert.
+    #[test]
+    fn test_compute_or_insert_identity_no_leak() {
+        let tree: Congee<usize, String> = Congee::new();
+        let value = Arc::new(String::from("v"));
+        {
+            let guard = tree.pin();
+            tree.insert(1, value.clone(), &guard).unwrap();
+            for _ in 0..64 {
+                let old = tree
+                    .compute_or_insert(1, |existing| existing.unwrap(), &guard)
+                    .unwrap()
+                    .unwrap();
+                assert!(Arc::ptr_eq(&old, &value));
+            }
+        }
+        wait_for_count(&value, 2);
+    }
+
+    /// Repeatedly inserting the same Arc is an identity update inside the
+    /// tree; the staged count must be handed back, not leaked.
+    #[test]
+    fn test_insert_identity_no_leak() {
+        let tree: Congee<usize, String> = Congee::new();
+        let value = Arc::new(String::from("v"));
+        {
+            let guard = tree.pin();
+            tree.insert(1, value.clone(), &guard).unwrap();
+            for _ in 0..64 {
+                let old = tree.insert(1, value.clone(), &guard).unwrap().unwrap();
+                assert!(Arc::ptr_eq(&old, &value));
+            }
+        }
+        wait_for_count(&value, 2);
+    }
+
+    /// A compute_if_present attempt whose produced value loses the version
+    /// check, followed by a retry that finds the key removed, terminates
+    /// without invoking the closure again. The candidate produced by the
+    /// failed attempt must be reclaimed. The barriers make the interleaving
+    /// deterministic: the remover strikes while the closure is running.
+    #[test]
+    fn test_compute_if_present_retry_absent_no_leak() {
+        use std::sync::Barrier;
+        use std::thread;
+
+        let tree: Arc<Congee<usize, String>> = Arc::new(Congee::new());
+        {
+            let guard = tree.pin();
+            // Two keys so removing one keeps the leaf node alive.
+            tree.insert(1, Arc::new(String::from("a")), &guard).unwrap();
+            tree.insert(2, Arc::new(String::from("b")), &guard).unwrap();
+        }
+
+        let replacement = Arc::new(String::from("r"));
+        let barrier = Arc::new(Barrier::new(2));
+
+        let remover = {
+            let tree = tree.clone();
+            let barrier = barrier.clone();
+            thread::spawn(move || {
+                let guard = tree.pin();
+                barrier.wait(); // closure entered
+                tree.remove(1, &guard);
+                barrier.wait(); // let the closure return
+            })
+        };
+
+        let result = {
+            let guard = tree.pin();
+            let replacement = replacement.clone();
+            let barrier = barrier.clone();
+            let mut first = true;
+            tree.compute_if_present(
+                1,
+                move |_current| {
+                    if first {
+                        first = false;
+                        barrier.wait();
+                        barrier.wait();
+                    }
+                    Some(replacement.clone())
+                },
+                &guard,
+            )
+        };
+        remover.join().unwrap();
+
+        // The remove won the race, so the update reports the key as absent.
+        assert!(result.is_none());
+        // Only the local handle may remain.
+        wait_for_count(&replacement, 1);
     }
 
     #[test]
