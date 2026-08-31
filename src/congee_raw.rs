@@ -2,6 +2,20 @@ use std::{marker::PhantomData, sync::Arc};
 
 use crate::{Allocator, CongeeInner, DefaultAllocator, epoch, error::OOMError, stats};
 
+/// The tree tags internal node pointers with the payload's high bit, so a
+/// value with that bit set would later be dereferenced as a node pointer.
+/// Reject it at the public conversion boundary in every build: one
+/// predictable branch on the write path, and a deterministic panic beats
+/// undefined behavior.
+#[inline]
+fn check_payload(v: usize) -> usize {
+    assert!(
+        v < (1usize << (usize::BITS - 1)),
+        "CongeeRaw values must be < 2^63 (the high bit tags internal node pointers)"
+    );
+    v
+}
+
 /// The adaptive radix tree.
 pub struct CongeeRaw<
     K: Copy + From<usize>,
@@ -160,7 +174,7 @@ where
     ///
     /// Values must be smaller than 2^63: the tree uses the high bit internally
     /// to distinguish payloads from node pointers, so a value with the high bit
-    /// set is not representable.
+    /// set is not representable and is rejected with a panic in every build.
     ///
     /// # Examples
     ///
@@ -178,7 +192,7 @@ where
     pub fn insert(&self, k: K, v: V, guard: &epoch::Guard) -> Result<Option<V>, OOMError> {
         let key = usize::from(k);
         let key: [u8; 8] = key.to_be_bytes();
-        let val = self.inner.insert(&key, usize::from(v), guard);
+        let val = self.inner.insert(&key, check_payload(usize::from(v)), guard);
         val.map(|inner| inner.map(|v| V::from(v)))
     }
 
@@ -259,7 +273,8 @@ where
     {
         let key = usize::from(*key);
         let key: [u8; 8] = key.to_be_bytes();
-        self.inner.compute_if_present(&key, &mut f, guard)
+        let mut checked_f = |v: usize| f(v).map(check_payload);
+        self.inner.compute_if_present(&key, &mut checked_f, guard)
     }
 
     /// Compute or insert the value if the key is not in the tree.
@@ -300,7 +315,8 @@ where
     {
         let key = usize::from(key);
         let key: [u8; 8] = key.to_be_bytes();
-        let u_val = self.inner.compute_or_insert(&key, &mut f, guard)?;
+        let mut checked_f = |v: Option<usize>| check_payload(f(v));
+        let u_val = self.inner.compute_or_insert(&key, &mut checked_f, guard)?;
         Ok(u_val.map(|v| V::from(v)))
     }
 
@@ -332,7 +348,7 @@ where
     ) -> Result<Option<V>, Option<V>> {
         let key = usize::from(*key);
         let key: [u8; 8] = key.to_be_bytes();
-        let new_v = new.map(|v| usize::from(v));
+        let new_v = new.map(|v| check_payload(usize::from(v)));
         let mut fc = |v: usize| -> Option<usize> {
             if v == usize::from(*old) {
                 new_v
@@ -388,5 +404,53 @@ where
     /// ```
     pub fn allocator(&self) -> &A {
         self.inner.allocator()
+    }
+}
+
+#[cfg(test)]
+mod payload_bound_tests {
+    use crate::CongeeRaw;
+
+    #[test]
+    #[should_panic(expected = "2^63")]
+    fn insert_rejects_tag_bit() {
+        let tree: CongeeRaw<usize, usize> = CongeeRaw::default();
+        let guard = tree.pin();
+        let _ = tree.insert(1, usize::MAX, &guard);
+    }
+
+    #[test]
+    #[should_panic(expected = "2^63")]
+    fn compute_or_insert_rejects_tag_bit() {
+        let tree: CongeeRaw<usize, usize> = CongeeRaw::default();
+        let guard = tree.pin();
+        let _ = tree.compute_or_insert(1, |_| usize::MAX, &guard);
+    }
+
+    #[test]
+    #[should_panic(expected = "2^63")]
+    fn compute_if_present_rejects_tag_bit() {
+        let tree: CongeeRaw<usize, usize> = CongeeRaw::default();
+        let guard = tree.pin();
+        tree.insert(1, 42, &guard).unwrap();
+        let _ = tree.compute_if_present(&1, |_| Some(usize::MAX), &guard);
+    }
+
+    #[test]
+    #[should_panic(expected = "2^63")]
+    fn compare_exchange_rejects_tag_bit() {
+        let tree: CongeeRaw<usize, usize> = CongeeRaw::default();
+        let guard = tree.pin();
+        tree.insert(1, 42, &guard).unwrap();
+        let _ = tree.compare_exchange(&1, &42, Some(usize::MAX), &guard);
+    }
+
+    #[test]
+    fn boundary_value_is_accepted() {
+        let tree: CongeeRaw<usize, usize> = CongeeRaw::default();
+        let guard = tree.pin();
+        let max_ok = (1usize << 63) - 1;
+        tree.insert(1, max_ok, &guard).unwrap();
+        assert_eq!(tree.get(&1, &guard).unwrap(), max_ok);
     }
 }
