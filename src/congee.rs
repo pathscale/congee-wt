@@ -263,7 +263,19 @@ where
     {
         let usize_key: usize = usize::from(key);
         let key: [u8; 8] = usize_key.to_be_bytes();
+        // The inner tree may call the closure several times when it retries on
+        // contention. Each call turns the produced value into a raw pointer,
+        // but only the pointer from the final, successful call is stored in
+        // the tree; reclaim the pointer of a failed attempt on the next call
+        // so its refcount is not leaked.
+        let mut pending_new: Option<usize> = None;
         let mut inner_f = |v: usize| {
+            if let Some(prev) = pending_new.take() {
+                // Safety
+                // The pointer was produced by Arc::into_raw in the previous
+                // (failed and therefore not stored) invocation below.
+                drop(unsafe { arc_from_usize::<V>(prev) });
+            }
             // Safety
             // The pointer was previously inserted with expose_provenance
             let owned = unsafe { arc_from_usize::<V>(v) };
@@ -272,7 +284,9 @@ where
             _ = Arc::into_raw(owned);
             if let Some(new) = rt {
                 let new_v = Arc::into_raw(new);
-                Some(new_v.expose_provenance())
+                let new_ptr = new_v.expose_provenance();
+                pending_new = Some(new_ptr);
+                Some(new_ptr)
             } else {
                 None
             }
@@ -432,7 +446,16 @@ where
         let usize_key = usize::from(key);
         let key_bytes: [u8; 8] = usize_key.to_be_bytes();
 
+        // See compute_if_present: reclaim the raw pointer produced by a failed
+        // (retried) invocation so its refcount is not leaked.
+        let mut pending_new: Option<usize> = None;
         let mut inner_f = |existing_ptr: Option<usize>| -> usize {
+            if let Some(prev) = pending_new.take() {
+                // Safety
+                // The pointer was produced by Arc::into_raw in the previous
+                // (failed and therefore not stored) invocation below.
+                drop(unsafe { arc_from_usize::<V>(prev) });
+            }
             let existing_arc = if let Some(ptr) = existing_ptr {
                 // Safety: The pointer was previously inserted with expose_provenance
                 let owned = unsafe { arc_from_usize::<V>(ptr) };
@@ -444,8 +467,9 @@ where
             };
 
             let new_arc = f(existing_arc);
-            let new_ptr = Arc::into_raw(new_arc);
-            new_ptr.expose_provenance()
+            let new_ptr = Arc::into_raw(new_arc).expose_provenance();
+            pending_new = Some(new_ptr);
+            new_ptr
         };
 
         let old_ptr = self
