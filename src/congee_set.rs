@@ -216,7 +216,7 @@ where
         self.inner.value_count(guard)
     }
 
-    /// Scans keys in the range [start, end] and writes them to the result buffer.
+    /// Scans keys in the end-exclusive range [start, end) and writes them to the result buffer.
     /// Returns the number of keys scanned.
     ///
     /// # Examples

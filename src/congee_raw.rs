@@ -182,8 +182,8 @@ where
         val.map(|inner| inner.map(|v| V::from(v)))
     }
 
-    /// Scan the tree with the range of [start, end], write the result to the
-    /// `result` buffer.
+    /// Scan the tree with the end-exclusive range [start, end), write the
+    /// result to the `result` buffer.
     /// It scans the length of `result` or the number of the keys within the range, whichever is smaller;
     /// returns the number of the keys scanned.
     ///
