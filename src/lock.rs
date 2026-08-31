@@ -1,5 +1,11 @@
 use std::{marker::PhantomData, ptr::NonNull, sync::atomic::Ordering};
 
+#[cfg(all(feature = "shuttle", test))]
+use shuttle::sync::atomic::fence;
+
+#[cfg(not(all(feature = "shuttle", test)))]
+use std::sync::atomic::fence;
+
 use crate::{
     error::ArtError,
     nodes::{BaseNode, Node},
@@ -25,7 +31,10 @@ impl<'a, T: Node> TypedReadGuard<'a, T> {
             .compare_exchange_weak(
                 self.version,
                 new_version,
-                Ordering::Release,
+                // AcqRel: lock acquisition needs Acquire so the critical section
+                // cannot be reordered before taking the lock; Release publishes
+                // the version bump to readers.
+                Ordering::AcqRel,
                 Ordering::Relaxed,
             ) {
             Ok(_) => Ok(TypedWriteGuard {
@@ -86,6 +95,10 @@ impl<'a> ReadGuard<'a> {
     }
 
     pub(crate) fn check_version(&self) -> Result<u32, ArtError> {
+        // Seqlock reader pattern: the Acquire fence keeps the preceding data
+        // loads from sinking below this re-validation load (a plain Acquire
+        // load only orders later accesses, not earlier ones).
+        fence(Ordering::Acquire);
         let v = self.as_ref().version_lock_obsolete.load(Ordering::Acquire);
 
         if v == self.version {
@@ -121,7 +134,10 @@ impl<'a> ReadGuard<'a> {
         match self.as_ref().version_lock_obsolete.compare_exchange_weak(
             self.version,
             new_version,
-            Ordering::Release,
+            // AcqRel: lock acquisition needs Acquire so the critical section
+            // cannot be reordered before taking the lock; Release publishes
+            // the version bump to readers.
+            Ordering::AcqRel,
             Ordering::Relaxed,
         ) {
             Ok(_) => Ok(WriteGuard {
