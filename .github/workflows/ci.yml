@@ -78,6 +78,8 @@ jobs:
  
   
   benchmark:
+    permissions:
+      contents: write
     runs-on: ubicloud-standard-4
     timeout-minutes: 30
     steps:
@@ -103,7 +105,7 @@ jobs:
         output-file-path: output.json
         fail-on-alert: true
         github-token: ${{ secrets.GITHUB_TOKEN }}
-        auto-push: true
+        auto-push: ${{ github.event_name == 'push' }}
         alert-threshold: "1000%"
   
   fuzz:
