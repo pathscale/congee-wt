@@ -158,6 +158,10 @@ where
 
     /// Insert a key-value pair to the tree, returns the previous value if the key was already present.
     ///
+    /// Values must be smaller than 2^63: the tree uses the high bit internally
+    /// to distinguish payloads from node pointers, so a value with the high bit
+    /// set is not representable.
+    ///
     /// # Examples
     ///
     /// ```
