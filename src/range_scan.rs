@@ -58,7 +58,7 @@ impl<'a, const K_LEN: usize> RangeScan<'a, K_LEN> {
         let mut key_tracker = KeyTracker::empty();
 
         loop {
-            let prefix_check_result = self.check_prefix_equals(node.as_ref(), &mut key_tracker);
+            let prefix_check_result = self.check_prefix_equals(node.as_ref(), &mut key_tracker)?;
 
             if let Some(parent_node) = &parent_node {
                 parent_node.check_version()?;
@@ -86,7 +86,7 @@ impl<'a, const K_LEN: usize> RangeScan<'a, K_LEN> {
                         for (k, n) in children {
                             node.check_version()?;
 
-                            key_tracker.push(k);
+                            key_tracker.push(k)?;
 
                             cast_ptr!(n => {
                                 Payload(payload) => {
@@ -128,7 +128,7 @@ impl<'a, const K_LEN: usize> RangeScan<'a, K_LEN> {
                             node.check_version()?;
                             return Ok(self.result_found);
                         }
-                        key_tracker.push(start_level);
+                        key_tracker.push(start_level)?;
 
                         cast_ptr!(next_node_tmp => {
                             Payload(_payload) => {
@@ -167,7 +167,7 @@ impl<'a, const K_LEN: usize> RangeScan<'a, K_LEN> {
     ) -> Result<(), ArtError> {
         let node = BaseNode::read_lock(node)?;
         let prefix_result =
-            self.check_prefix_compare(node.as_ref(), self.end, 255, &mut key_tracker);
+            self.check_prefix_compare(node.as_ref(), self.end, 255, &mut key_tracker)?;
         let level = key_tracker.len();
 
         parent_node.check_version()?;
@@ -186,7 +186,7 @@ impl<'a, const K_LEN: usize> RangeScan<'a, K_LEN> {
                 for (k, n) in children {
                     node.check_version()?;
 
-                    key_tracker.push(k);
+                    key_tracker.push(k)?;
 
                     cast_ptr!(n => {
                         Payload(payload) => {
@@ -227,7 +227,7 @@ impl<'a, const K_LEN: usize> RangeScan<'a, K_LEN> {
     ) -> Result<(), ArtError> {
         let node = BaseNode::read_lock(node)?;
         let prefix_result =
-            self.check_prefix_compare(node.as_ref(), self.start, 0, &mut key_tracker);
+            self.check_prefix_compare(node.as_ref(), self.start, 0, &mut key_tracker)?;
 
         parent_node.check_version()?;
         node.check_version()?;
@@ -250,7 +250,7 @@ impl<'a, const K_LEN: usize> RangeScan<'a, K_LEN> {
                 for (k, n) in children {
                     node.check_version()?;
 
-                    key_tracker.push(k);
+                    key_tracker.push(k)?;
 
                     cast_ptr!(n => {
                         Payload(payload) => {
@@ -310,7 +310,7 @@ impl<'a, const K_LEN: usize> RangeScan<'a, K_LEN> {
                 for (k, c) in children {
                     node.check_version()?;
 
-                    key_tracker.push(k);
+                    key_tracker.push(k)?;
 
                     let cur_key = KeyTracker::append_prefix(c, &key_tracker)?;
                     self.copy_node_recursive(c, &cur_key)?;
@@ -336,7 +336,7 @@ impl<'a, const K_LEN: usize> RangeScan<'a, K_LEN> {
         k: &[u8; K_LEN],
         fill_key: u8,
         key_tracker: &mut KeyTracker<K_LEN>,
-    ) -> cmp::Ordering {
+    ) -> Result<cmp::Ordering, ArtError> {
         let n_prefix = n.prefix();
         if !n_prefix.is_empty() {
             for (i, cur_key) in n_prefix.iter().enumerate() {
@@ -346,29 +346,29 @@ impl<'a, const K_LEN: usize> RangeScan<'a, K_LEN> {
                     fill_key
                 };
 
-                key_tracker.push(*cur_key);
+                key_tracker.push(*cur_key)?;
 
                 if *cur_key < k_level {
                     for v in n_prefix.iter().skip(i + 1) {
-                        key_tracker.push(*v);
+                        key_tracker.push(*v)?;
                     }
-                    return cmp::Ordering::Less;
+                    return Ok(cmp::Ordering::Less);
                 } else if *cur_key > k_level {
                     for v in n_prefix.iter().skip(i + 1) {
-                        key_tracker.push(*v);
+                        key_tracker.push(*v)?;
                     }
-                    return cmp::Ordering::Greater;
+                    return Ok(cmp::Ordering::Greater);
                 }
             }
         }
-        cmp::Ordering::Equal
+        Ok(cmp::Ordering::Equal)
     }
 
     fn check_prefix_equals(
         &self,
         n: &BaseNode,
         key_tracker: &mut KeyTracker<K_LEN>,
-    ) -> PrefixCheckEqualsResult {
+    ) -> Result<PrefixCheckEqualsResult, ArtError> {
         let n_prefix = n.prefix();
 
         for (i, cur_key) in n_prefix.iter().enumerate() {
@@ -386,18 +386,18 @@ impl<'a, const K_LEN: usize> RangeScan<'a, K_LEN> {
             };
 
             if (*cur_key == start_level) && (*cur_key == end_level) {
-                key_tracker.push(*cur_key);
+                key_tracker.push(*cur_key)?;
                 continue;
             } else if (*cur_key >= start_level) && (*cur_key <= end_level) {
-                key_tracker.push(*cur_key);
+                key_tracker.push(*cur_key)?;
                 for v in n_prefix.iter().skip(i + 1) {
-                    key_tracker.push(*v);
+                    key_tracker.push(*v)?;
                 }
-                return PrefixCheckEqualsResult::AllIncluded;
+                return Ok(PrefixCheckEqualsResult::AllIncluded);
             } else if *cur_key < start_level || *cur_key > end_level {
-                return PrefixCheckEqualsResult::NotMatch;
+                return Ok(PrefixCheckEqualsResult::NotMatch);
             }
         }
-        PrefixCheckEqualsResult::BothMatch
+        Ok(PrefixCheckEqualsResult::BothMatch)
     }
 }

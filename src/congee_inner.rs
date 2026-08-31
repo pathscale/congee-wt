@@ -241,13 +241,13 @@ impl<const K_LEN: usize, A: Allocator + Clone + Send> CongeeInner<K_LEN, A> {
         let node_prefix = node_lock.as_ref().prefix();
         let prefix_len = node_prefix.len();
         for &byte in node_prefix {
-            key_tracker.push(byte);
+            key_tracker.push(byte)?;
         }
 
         let children = node_lock.as_ref().get_children(0, 255);
         for (k, child_ptr) in children {
             // Add the edge key to the tracker
-            key_tracker.push(k);
+            key_tracker.push(k)?;
 
             cast_ptr!(child_ptr => {
                 Payload(tid) => {

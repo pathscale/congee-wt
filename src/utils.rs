@@ -104,12 +104,18 @@ impl<const K_LEN: usize> KeyTracker<K_LEN> {
         }
     }
 
+    /// Appends one key byte. Overflow past `K_LEN` can only happen when a
+    /// concurrently modified prefix was read torn, so it is reported as the
+    /// retryable `VersionNotMatch` instead of panicking (release builds are
+    /// panic=abort).
     #[inline]
-    pub(crate) fn push(&mut self, key: u8) {
-        debug_assert!(self.len <= K_LEN);
-
+    pub(crate) fn push(&mut self, key: u8) -> Result<(), ArtError> {
+        if self.len >= K_LEN {
+            return Err(ArtError::VersionNotMatch);
+        }
         self.data[self.len] = key;
         self.len += 1;
+        Ok(())
     }
 
     #[inline]
@@ -137,7 +143,7 @@ impl<const K_LEN: usize> KeyTracker<K_LEN> {
                 let n_prefix = node_ref.as_ref().prefix().iter();
                 let mut cur_key = key_tracker.clone();
                 for i in n_prefix {
-                    cur_key.push(*i);
+                    cur_key.push(*i)?;
                 }
                 // The prefix bytes were read while a concurrent writer may have
                 // been mutating the node; re-validate so a torn read becomes a
