@@ -106,6 +106,7 @@ impl<'a, const K_LEN: usize> RangeScan<'a, K_LEN> {
                             key_tracker.pop();
 
                             if self.to_continue {
+                                node.check_version()?;
                                 return Ok(self.result_found);
                             }
                         }
@@ -124,6 +125,7 @@ impl<'a, const K_LEN: usize> RangeScan<'a, K_LEN> {
 
                         if key_tracker.len() == (K_LEN - 1) {
                             self.copy_node_recursive(next_node_tmp, &key_tracker)?;
+                            node.check_version()?;
                             return Ok(self.result_found);
                         }
                         key_tracker.push(start_level);
@@ -140,10 +142,14 @@ impl<'a, const K_LEN: usize> RangeScan<'a, K_LEN> {
                             }
                         });
                     }
+                    // Final validation: no read from this node may escape into the
+                    // results without a version check after it.
+                    node.check_version()?;
                     return Ok(self.result_found);
                 }
                 PrefixCheckEqualsResult::AllIncluded => {
                     self.copy_node_recursive(NodePtr::from_node_ref(node.as_ref()), &key_tracker)?;
+                    node.check_version()?;
                     return Ok(self.result_found);
                 }
                 PrefixCheckEqualsResult::NotMatch => {
@@ -201,10 +207,14 @@ impl<'a, const K_LEN: usize> RangeScan<'a, K_LEN> {
                         break;
                     }
                 }
+                // Final validation before the collected children escape upward.
+                node.check_version()?;
                 Ok(())
             }
             cmp::Ordering::Less => {
-                self.copy_node_recursive(NodePtr::from_node_ref(node.as_ref()), &key_tracker)
+                self.copy_node_recursive(NodePtr::from_node_ref(node.as_ref()), &key_tracker)?;
+                node.check_version()?;
+                Ok(())
             }
         }
     }
@@ -224,7 +234,9 @@ impl<'a, const K_LEN: usize> RangeScan<'a, K_LEN> {
 
         match prefix_result {
             cmp::Ordering::Greater => {
-                self.copy_node_recursive(NodePtr::from_node_ref(node.as_ref()), &key_tracker)
+                self.copy_node_recursive(NodePtr::from_node_ref(node.as_ref()), &key_tracker)?;
+                node.check_version()?;
+                Ok(())
             }
             cmp::Ordering::Equal => {
                 let start_level = if self.start.len() > key_tracker.len() {
@@ -259,6 +271,8 @@ impl<'a, const K_LEN: usize> RangeScan<'a, K_LEN> {
                         break;
                     }
                 }
+                // Final validation before the collected children escape upward.
+                node.check_version()?;
                 Ok(())
             }
             cmp::Ordering::Less => Ok(()),
@@ -307,6 +321,9 @@ impl<'a, const K_LEN: usize> RangeScan<'a, K_LEN> {
 
                     key_tracker.pop();
                 }
+
+                // Final validation before the copied subtree escapes upward.
+                node.check_version()?;
             }
         });
 

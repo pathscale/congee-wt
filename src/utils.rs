@@ -139,6 +139,10 @@ impl<const K_LEN: usize> KeyTracker<K_LEN> {
                 for i in n_prefix {
                     cur_key.push(*i);
                 }
+                // The prefix bytes were read while a concurrent writer may have
+                // been mutating the node; re-validate so a torn read becomes a
+                // retry instead of escaping into scan results.
+                node_ref.check_version()?;
                 Ok(cur_key)
             }
         })
