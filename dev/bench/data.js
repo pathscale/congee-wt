@@ -1,6 +1,6 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1758914050098,
-  "repoUrl": "https://github.com/XiangpengHao/congee",
+  "lastUpdate": 1788223379850,
+  "repoUrl": "https://github.com/pathscale/congee-wt",
   "entries": {
     "Congee basic op performance": [
       {
@@ -7643,6 +7643,43 @@ window.BENCHMARK_DATA = {
           {
             "name": "UpdateOnly",
             "value": 16803355,
+            "unit": "QPS"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "no-reply@pathscale.com",
+            "name": "meh"
+          },
+          "committer": {
+            "email": "no-reply@pathscale.com",
+            "name": "meh"
+          },
+          "distinct": false,
+          "id": "ef8dd33ccf304bc24d982a1262c7928f84e4411b",
+          "message": "Push benchmark charts only from master builds\n\nThe gh-pages auto-push ran on pull requests too, where the default token has\nno write permission, failing the job after the benchmark itself had passed.\nPull requests keep the benchmark and the regression alert; only push builds\npublish the chart, with the write permission the job actually needs.",
+          "timestamp": "2026-09-01T05:03:32+07:00",
+          "tree_id": "f24d99cb4d11099e310c76b26fb4d59f72f65d7b",
+          "url": "https://github.com/pathscale/congee-wt/commit/ef8dd33ccf304bc24d982a1262c7928f84e4411b"
+        },
+        "date": 1788223378225,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "ReadOnly",
+            "value": 11149228,
+            "unit": "QPS"
+          },
+          {
+            "name": "UpdateOnly",
+            "value": 20499887,
+            "unit": "QPS"
+          },
+          {
+            "name": "ScanOnly",
+            "value": 3545812,
             "unit": "QPS"
           }
         ]
