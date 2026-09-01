@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788223379850,
+  "lastUpdate": 1788224666398,
   "repoUrl": "https://github.com/pathscale/congee-wt",
   "entries": {
     "Congee basic op performance": [
@@ -7680,6 +7680,43 @@ window.BENCHMARK_DATA = {
           {
             "name": "ScanOnly",
             "value": 3545812,
+            "unit": "QPS"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "no-reply@pathscale.com",
+            "name": "meh"
+          },
+          "committer": {
+            "email": "no-reply@pathscale.com",
+            "name": "meh"
+          },
+          "distinct": true,
+          "id": "7e54759aaaaa21f75a6aeb05fbfd5cf7e5fb64b7",
+          "message": "Publish automatically when master carries a new version\n\nThe publish job runs only on master pushes, after the test jobs, checks the\nsparse index first so an unchanged version costs one curl, and skips with a\nnotice until CARGO_REGISTRY_TOKEN is configured. Version bump on master is\nnow the release trigger.",
+          "timestamp": "2026-09-01T08:01:25+07:00",
+          "tree_id": "1070b8373a3552488ed90ef331f027d048b56def",
+          "url": "https://github.com/pathscale/congee-wt/commit/7e54759aaaaa21f75a6aeb05fbfd5cf7e5fb64b7"
+        },
+        "date": 1788224665165,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "UpdateOnly",
+            "value": 21075537,
+            "unit": "QPS"
+          },
+          {
+            "name": "ReadOnly",
+            "value": 10697974,
+            "unit": "QPS"
+          },
+          {
+            "name": "ScanOnly",
+            "value": 4211764,
             "unit": "QPS"
           }
         ]
