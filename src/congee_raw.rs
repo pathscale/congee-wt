@@ -77,7 +77,7 @@ where
     /// ```
     #[inline]
     pub fn pin(&self) -> epoch::Guard {
-        crossbeam_epoch::pin()
+        epoch::pin()
     }
 
     /// Create an empty [Art] tree.

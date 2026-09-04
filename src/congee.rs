@@ -132,7 +132,7 @@ where
     /// let guard = tree.pin();
     /// ```
     pub fn pin(&self) -> epoch::Guard {
-        crossbeam_epoch::pin()
+        epoch::pin()
     }
 
     /// Returns true if the tree is empty.
@@ -784,7 +784,7 @@ mod tests {
             if Arc::strong_count(arc) == expected {
                 return;
             }
-            crossbeam_epoch::pin().flush();
+            epoch::pin().flush();
             std::thread::yield_now();
         }
         assert_eq!(Arc::strong_count(arc), expected);

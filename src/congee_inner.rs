@@ -1,9 +1,8 @@
 use std::{marker::PhantomData, ptr::NonNull, sync::Arc};
 
-use crossbeam_epoch::Guard;
-
 use crate::{
     Allocator, DefaultAllocator, cast_ptr,
+    epoch::Guard,
     error::{ArtError, OOMError},
     lock::ReadGuard,
     nodes::{BaseNode, ChildIsPayload, ChildIsSubNode, Node, Node4, NodePtr, NodeType, Parent},
@@ -91,7 +90,7 @@ impl<const K_LEN: usize, A: Allocator + Clone + Send> Drop for CongeeInner<K_LEN
 
         // see this: https://github.com/XiangpengHao/congee/issues/20
         for _ in 0..128 {
-            crossbeam_epoch::pin().flush();
+            crate::epoch::pin().flush();
         }
     }
 }

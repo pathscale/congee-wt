@@ -83,7 +83,7 @@ where
     /// ```
     #[inline]
     pub fn pin(&self) -> epoch::Guard {
-        crossbeam_epoch::pin()
+        epoch::pin()
     }
 
     /// Returns true if the set is empty.

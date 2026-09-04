@@ -5,6 +5,7 @@ use shuttle::thread;
 use std::thread;
 
 use crate::congee_inner::CongeeInner;
+use crate::epoch as crossbeam_epoch;
 use std::sync::{Arc, Barrier, Mutex};
 
 #[test]
