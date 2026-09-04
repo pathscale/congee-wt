@@ -7,6 +7,7 @@ use shuttle::thread;
 use std::thread;
 
 use crate::congee_inner::CongeeInner;
+use crate::epoch as crossbeam_epoch;
 
 use rand::prelude::StdRng;
 use rand::seq::SliceRandom;

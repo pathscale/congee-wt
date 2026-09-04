@@ -4,10 +4,9 @@ use std::ptr::NonNull;
 #[cfg(not(all(feature = "shuttle", test)))]
 use std::sync::atomic::{AtomicPtr, AtomicU32, Ordering};
 
-use crossbeam_epoch::Guard;
-
 use crate::{
     Allocator,
+    epoch::Guard,
     error::ArtError,
     lock::{ReadGuard, TypedReadGuard},
     nodes::{

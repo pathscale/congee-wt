@@ -342,7 +342,7 @@ impl<const K_LEN: usize, A: Allocator + Clone + Send> CongeeInner<K_LEN, A> {
         };
 
         self.dfs_visitor_slow(&mut visitor).unwrap();
-        let pin = crossbeam_epoch::pin();
+        let pin = crate::epoch::pin();
         visitor.node_stats.kv_pairs = self.value_count(&pin);
 
         visitor.node_stats
