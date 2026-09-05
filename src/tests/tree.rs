@@ -5,7 +5,6 @@ use shuttle::thread;
 use std::thread;
 
 use crate::congee_inner::CongeeInner;
-use crate::epoch as crossbeam_epoch;
 use std::sync::{Arc, Barrier, Mutex};
 
 #[test]
@@ -13,7 +12,7 @@ fn small_insert() {
     let key_cnt = 10_000usize;
     let tree = CongeeInner::default();
 
-    let guard = crossbeam_epoch::pin();
+    let guard = tree.pin();
     for k in 0..key_cnt {
         let key: [u8; 8] = k.to_be_bytes();
         tree.insert(&key, k, &guard).unwrap();
@@ -29,7 +28,7 @@ fn test_get_keys() {
     let mut values_from_keys = vec![];
     let tree = CongeeInner::default();
 
-    let guard = crossbeam_epoch::pin();
+    let guard = tree.pin();
     for k in 0..key_cnt {
         let key: [u8; 8] = k.to_be_bytes();
         tree.insert(&key, k, &guard).unwrap();
@@ -55,7 +54,7 @@ fn test_sparse_keys() {
     let tree = CongeeInner::new(LeakCheckAllocator::new(), Arc::new(|_k, _v| {}));
     let mut keys = Vec::<usize>::with_capacity(key_cnt);
 
-    let guard = crossbeam_epoch::pin();
+    let guard = tree.pin();
     let mut rng = StdRng::seed_from_u64(12);
     for _i in 0..key_cnt {
         let k = rng.r#gen::<usize>() & 0x7fff_ffff_ffff_ffff;
@@ -113,7 +112,7 @@ fn test_concurrent_insert() {
         let tree = tree.clone();
 
         handlers.push(thread::spawn(move || {
-            let guard = crossbeam_epoch::pin();
+            let guard = tree.pin();
             for i in 0..key_cnt_per_thread {
                 let idx = t * key_cnt_per_thread + i;
                 let val = key_space[idx];
@@ -127,7 +126,7 @@ fn test_concurrent_insert() {
         h.join().unwrap();
     }
 
-    let guard = crossbeam_epoch::pin();
+    let guard = tree.pin();
     for v in key_space.iter() {
         let key: [u8; 8] = v.to_be_bytes();
         let val = tree.get(&key, &guard).unwrap();
@@ -179,10 +178,10 @@ fn test_concurrent_insert_read() {
         let tree = tree.clone();
         handlers.push(thread::spawn(move || {
             let mut r = StdRng::seed_from_u64(10 + t);
-            let mut guard = crossbeam_epoch::pin();
+            let mut guard = tree.pin();
             for i in 0..key_cnt_per_thread {
                 if i % 100 == 0 {
-                    guard = crossbeam_epoch::pin();
+                    guard = tree.pin();
                 }
 
                 let val = r.gen_range(0..(key_cnt_per_thread * w_thread));
@@ -198,10 +197,10 @@ fn test_concurrent_insert_read() {
         let key_space = key_space.clone();
         let tree = tree.clone();
         handlers.push(thread::spawn(move || {
-            let mut guard = crossbeam_epoch::pin();
+            let mut guard = tree.pin();
             for i in 0..key_cnt_per_thread {
                 if i % 100 == 0 {
-                    guard = crossbeam_epoch::pin();
+                    guard = tree.pin();
                 }
 
                 let idx = t * key_cnt_per_thread + i;
@@ -215,7 +214,7 @@ fn test_concurrent_insert_read() {
         h.join().unwrap();
     }
 
-    let guard = crossbeam_epoch::pin();
+    let guard = tree.pin();
     for v in key_space.iter() {
         let key: [u8; 8] = v.to_be_bytes();
         let val = tree.get(&key, &guard).unwrap();
@@ -240,11 +239,11 @@ fn inserted_key_is_immediately_visible_during_disjoint_churn() {
         let barrier = Arc::clone(&barrier);
         let mutation = Arc::clone(&mutation);
         handlers.push(thread::spawn(move || {
-            let mut guard = crossbeam_epoch::pin();
+            let mut guard = tree.pin();
             barrier.wait();
             for sequence in 0..10_000usize {
                 if sequence % 100 == 0 {
-                    guard = crossbeam_epoch::pin();
+                    guard = tree.pin();
                 }
 
                 let value = worker * 10_000 + sequence;
@@ -273,7 +272,7 @@ fn inserted_key_is_immediately_visible_during_disjoint_churn() {
     for handler in handlers {
         handler.join().unwrap();
     }
-    let guard = crossbeam_epoch::pin();
+    let guard = tree.pin();
     assert_eq!(tree.value_count(&guard), 0);
 }
 

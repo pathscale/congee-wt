@@ -82,8 +82,8 @@ where
     /// let guard = set.pin();
     /// ```
     #[inline]
-    pub fn pin(&self) -> epoch::Guard {
-        epoch::pin()
+    pub fn pin(&self) -> epoch::Guard<'_> {
+        self.inner.pin()
     }
 
     /// Returns true if the set is empty.

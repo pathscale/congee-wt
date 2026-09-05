@@ -23,6 +23,8 @@ fn drop_with_drainer() {
         crate::CongeeRaw::<usize, usize>::new_with_drainer(DefaultAllocator {}, drain_function);
     let pin = tree.pin();
     tree.insert(1, 42, &pin).unwrap();
+    // A per-tree guard must not outlive the reclaimer it protects.
+    drop(pin);
     drop(tree);
     assert_eq!(deleted_key.load(std::sync::atomic::Ordering::Relaxed), 1);
     assert_eq!(deleted_value.load(std::sync::atomic::Ordering::Relaxed), 42);
