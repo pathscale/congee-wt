@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788224666398,
+  "lastUpdate": 1788575699110,
   "repoUrl": "https://github.com/pathscale/congee-wt",
   "entries": {
     "Congee basic op performance": [
@@ -7717,6 +7717,44 @@ window.BENCHMARK_DATA = {
           {
             "name": "ScanOnly",
             "value": 4211764,
+            "unit": "QPS"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "no-reply@pathscale.com",
+            "name": "meh"
+          },
+          "committer": {
+            "email": "cbergstrom@pathscale.com",
+            "name": "pathscale",
+            "username": "pathscale"
+          },
+          "distinct": true,
+          "id": "d068db5df3dc8403d66cf0d19ecbed9edf688ab3",
+          "message": "Update benches and docs for scoped reclaim guards",
+          "timestamp": "2026-09-05T09:32:34+07:00",
+          "tree_id": "86945b312ff4a57deda78c864db6238cf09b0769",
+          "url": "https://github.com/pathscale/congee-wt/commit/d068db5df3dc8403d66cf0d19ecbed9edf688ab3"
+        },
+        "date": 1788575697852,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "UpdateOnly",
+            "value": 20298667,
+            "unit": "QPS"
+          },
+          {
+            "name": "ScanOnly",
+            "value": 4356396,
+            "unit": "QPS"
+          },
+          {
+            "name": "ReadOnly",
+            "value": 14854492,
             "unit": "QPS"
           }
         ]
