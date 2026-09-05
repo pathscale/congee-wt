@@ -146,7 +146,7 @@ impl DBIndex for BTreeMapWrapper {
 }
 
 impl DBIndex for CongeeRaw<usize, usize> {
-    type Guard<'a> = crossbeam_epoch::Guard;
+    type Guard<'a> = congee::epoch::Guard<'a>;
 
     fn pin(&self) -> Self::Guard<'_> {
         self.pin()

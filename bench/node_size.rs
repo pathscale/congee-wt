@@ -22,7 +22,7 @@ fn bench_workload(key_gen: impl Fn(usize) -> usize) {
     guard.flush();
     drop(guard);
     for _ in 0..128 {
-        crossbeam_epoch::pin().flush();
+        set.pin().flush();
     }
 
     println!(

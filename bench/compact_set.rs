@@ -70,6 +70,7 @@ impl CompactSetTestBench {
         }
 
         println!("Tree stats: \n{}", tree.stats());
+        drop(guard);
 
         let (congee_set, congee_compact_set) = match format {
             FlatFormat::CongeeSet => (Some(tree), None),
