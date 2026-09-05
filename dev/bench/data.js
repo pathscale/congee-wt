@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788575699110,
+  "lastUpdate": 1788591542186,
   "repoUrl": "https://github.com/pathscale/congee-wt",
   "entries": {
     "Congee basic op performance": [
@@ -7755,6 +7755,43 @@ window.BENCHMARK_DATA = {
           {
             "name": "ReadOnly",
             "value": 14854492,
+            "unit": "QPS"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "no-reply@pathscale.com",
+            "name": "meh"
+          },
+          "committer": {
+            "email": "no-reply@pathscale.com",
+            "name": "meh"
+          },
+          "distinct": false,
+          "id": "f45ec52dbe70fb2beddb45d53173b5f93e1f36ea",
+          "message": "Target Dependabot updates at master",
+          "timestamp": "2026-09-05T13:56:09+07:00",
+          "tree_id": "46b3e36170fe08df1cf22c83e1e9cc4506d57683",
+          "url": "https://github.com/pathscale/congee-wt/commit/f45ec52dbe70fb2beddb45d53173b5f93e1f36ea"
+        },
+        "date": 1788591540956,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "UpdateOnly",
+            "value": 21180449,
+            "unit": "QPS"
+          },
+          {
+            "name": "ReadOnly",
+            "value": 18313643,
+            "unit": "QPS"
+          },
+          {
+            "name": "ScanOnly",
+            "value": 4425808,
             "unit": "QPS"
           }
         ]
