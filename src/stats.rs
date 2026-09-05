@@ -337,14 +337,15 @@ impl<const K_LEN: usize> CongeeVisitor<K_LEN> for StatsVisitor {
 impl<const K_LEN: usize, A: Allocator + Clone + Send> CongeeInner<K_LEN, A> {
     /// Returns the node stats for the tree.
     pub fn stats(&self) -> NodeStats {
-        let mut visitor = StatsVisitor {
-            node_stats: NodeStats::default(),
-        };
-
-        self.dfs_visitor_slow(&mut visitor).unwrap();
-        let pin = crate::epoch::pin();
-        visitor.node_stats.kv_pairs = self.value_count(&pin);
-
-        visitor.node_stats
+        let pin = self.pin();
+        loop {
+            let mut visitor = StatsVisitor {
+                node_stats: NodeStats::default(),
+            };
+            if self.dfs_visitor_slow(&mut visitor).is_ok() {
+                visitor.node_stats.kv_pairs = self.value_count(&pin);
+                return visitor.node_stats;
+            }
+        }
     }
 }

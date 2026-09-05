@@ -7,7 +7,6 @@ use shuttle::thread;
 use std::thread;
 
 use crate::congee_inner::CongeeInner;
-use crate::epoch as crossbeam_epoch;
 
 use rand::prelude::StdRng;
 use rand::seq::SliceRandom;
@@ -18,7 +17,7 @@ fn small_scan() {
     let tree = CongeeInner::default();
     let key_cnt: usize = 1000;
 
-    let guard = crossbeam_epoch::pin();
+    let guard = tree.pin();
     for i in 0..key_cnt {
         let key: [u8; 8] = i.to_be_bytes();
         tree.insert(&key, i, &guard).unwrap();
@@ -50,7 +49,7 @@ fn large_scan() {
     let mut r = StdRng::seed_from_u64(42);
     key_space.shuffle(&mut r);
 
-    let guard = crossbeam_epoch::pin();
+    let guard = tree.pin();
     for v in key_space.iter() {
         let key: [u8; 8] = v.to_be_bytes();
         tree.insert(&key, *v, &guard).unwrap();
@@ -102,7 +101,7 @@ fn large_scan_small_buffer() {
     let mut r = StdRng::seed_from_u64(42);
     key_space.shuffle(&mut r);
 
-    let guard = crossbeam_epoch::pin();
+    let guard = tree.pin();
     for v in key_space.iter() {
         let key: [u8; 8] = v.to_be_bytes();
         tree.insert(&key, *v, &guard).unwrap();
@@ -166,7 +165,7 @@ fn test_insert_and_scan() {
     for t in 0..scan_thread {
         let tree = tree.clone();
         handlers.push(thread::spawn(move || {
-            let guard = crossbeam_epoch::pin();
+            let guard = tree.pin();
             let mut r = StdRng::seed_from_u64(42 + t);
             let scan_counts = [3, 13, 65, 257, 513];
             let scan_cnt = scan_counts.choose(&mut r).unwrap();
@@ -185,7 +184,7 @@ fn test_insert_and_scan() {
         let tree = tree.clone();
 
         handlers.push(thread::spawn(move || {
-            let guard = crossbeam_epoch::pin();
+            let guard = tree.pin();
             for i in 0..key_cnt_per_thread {
                 let idx = t * key_cnt_per_thread + i;
                 let val = key_space[idx];
@@ -199,7 +198,7 @@ fn test_insert_and_scan() {
         h.join().unwrap();
     }
 
-    let guard = crossbeam_epoch::pin();
+    let guard = tree.pin();
     for v in key_space.iter() {
         let key: [u8; 8] = v.to_be_bytes();
         let val = tree.get(&key, &guard).unwrap();
@@ -234,7 +233,7 @@ fn test_scan_racing_same_node_insert() {
     let tree = Arc::new(CongeeInner::<8>::default());
 
     {
-        let guard = crossbeam_epoch::pin();
+        let guard = tree.pin();
         for k in [0x0201usize, 0x0202] {
             tree.insert(&k.to_be_bytes(), k, &guard).unwrap();
         }
@@ -246,10 +245,10 @@ fn test_scan_racing_same_node_insert() {
         let tree = tree.clone();
         let done = done.clone();
         thread::spawn(move || {
-            let mut guard = crossbeam_epoch::pin();
+            let mut guard = tree.pin();
             for i in 0..SCAN_RACE_ROUNDS {
                 if i.is_multiple_of(128) {
-                    guard = crossbeam_epoch::pin();
+                    guard = tree.pin();
                 }
                 for a in [0x01usize, 0x03] {
                     let k = (a << 8) | 0x01;
@@ -269,7 +268,7 @@ fn test_scan_racing_same_node_insert() {
         let tree = tree.clone();
         let done = done.clone();
         thread::spawn(move || {
-            let mut guard = crossbeam_epoch::pin();
+            let mut guard = tree.pin();
             let low: [u8; 8] = 0x0201usize.to_be_bytes();
             let high: [u8; 8] = 0x0203usize.to_be_bytes();
             let mut rounds = 0usize;
@@ -282,7 +281,7 @@ fn test_scan_racing_same_node_insert() {
                 }
                 rounds += 1;
                 if rounds.is_multiple_of(128) {
-                    guard = crossbeam_epoch::pin();
+                    guard = tree.pin();
                 }
                 let mut results = [([0u8; 8], 0usize); 4];
                 let scanned = tree.range(&low, &high, &mut results, &guard);
@@ -318,7 +317,7 @@ fn shuttle_scan_insert_race() {
 #[test]
 fn fuzz_0() {
     let tree = CongeeInner::default();
-    let guard = crossbeam_epoch::pin();
+    let guard = tree.pin();
 
     let key: [u8; 8] = 54227usize.to_be_bytes();
     tree.insert(&key, 54227, &guard).unwrap();
@@ -334,7 +333,7 @@ fn fuzz_0() {
 #[test]
 fn fuzz_1() {
     let tree = CongeeInner::default();
-    let guard = crossbeam_epoch::pin();
+    let guard = tree.pin();
 
     let value = 4294967179usize;
     let key: [u8; 8] = value.to_be_bytes();
@@ -357,7 +356,7 @@ fn fuzz_1() {
 #[test]
 fn fuzz_2() {
     let tree = CongeeInner::default();
-    let guard = crossbeam_epoch::pin();
+    let guard = tree.pin();
 
     let value = 4261390591usize;
     let key: [u8; 8] = value.to_be_bytes();
@@ -379,7 +378,7 @@ fn fuzz_2() {
 #[test]
 fn fuzz_3() {
     let tree = CongeeInner::default();
-    let guard = crossbeam_epoch::pin();
+    let guard = tree.pin();
 
     let value = 4294967295usize;
     let key: [u8; 8] = value.to_be_bytes();
@@ -408,7 +407,7 @@ fn fuzz_3() {
 #[test]
 fn fuzz_4() {
     let tree = CongeeInner::default();
-    let guard = crossbeam_epoch::pin();
+    let guard = tree.pin();
 
     let value = 219021065usize;
     let key: [u8; 8] = value.to_be_bytes();
@@ -430,7 +429,7 @@ fn fuzz_4() {
 #[test]
 fn fuzz_5() {
     let tree = CongeeInner::default();
-    let guard = crossbeam_epoch::pin();
+    let guard = tree.pin();
 
     let value = 4294967128usize;
     let key: [u8; 8] = value.to_be_bytes();
@@ -452,7 +451,7 @@ fn fuzz_5() {
 #[test]
 fn fuzz_6() {
     let tree = CongeeInner::default();
-    let guard = crossbeam_epoch::pin();
+    let guard = tree.pin();
 
     let value = 4278190080usize;
     let key: [u8; 8] = value.to_be_bytes();

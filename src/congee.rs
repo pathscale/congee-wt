@@ -131,8 +131,8 @@ where
     /// let tree: Congee<usize, String> = Congee::new();
     /// let guard = tree.pin();
     /// ```
-    pub fn pin(&self) -> epoch::Guard {
-        epoch::pin()
+    pub fn pin(&self) -> epoch::Guard<'_> {
+        self.inner.pin()
     }
 
     /// Returns true if the tree is empty.
@@ -779,12 +779,16 @@ mod tests {
     /// parallel can pin the epoch, so this polls instead of assuming a fixed
     /// number of flushes suffices. Panics if the count never settles: a
     /// leaked count keeps it above `expected` forever.
-    fn wait_for_count<T>(arc: &Arc<T>, expected: usize) {
+    fn wait_for_count<T: Send + Sync + 'static>(
+        tree: &Congee<usize, T>,
+        arc: &Arc<T>,
+        expected: usize,
+    ) {
         for _ in 0..100_000 {
             if Arc::strong_count(arc) == expected {
                 return;
             }
-            epoch::pin().flush();
+            tree.pin().flush();
             std::thread::yield_now();
         }
         assert_eq!(Arc::strong_count(arc), expected);
@@ -806,7 +810,7 @@ mod tests {
             }
         }
         // One count here, one in the tree; every candidate count reclaimed.
-        wait_for_count(&value, 2);
+        wait_for_count(&tree, &value, 2);
     }
 
     /// Same as above through compute_or_insert.
@@ -825,7 +829,7 @@ mod tests {
                 assert!(Arc::ptr_eq(&old, &value));
             }
         }
-        wait_for_count(&value, 2);
+        wait_for_count(&tree, &value, 2);
     }
 
     /// Repeatedly inserting the same Arc is an identity update inside the
@@ -842,7 +846,7 @@ mod tests {
                 assert!(Arc::ptr_eq(&old, &value));
             }
         }
-        wait_for_count(&value, 2);
+        wait_for_count(&tree, &value, 2);
     }
 
     /// A compute_if_present attempt whose produced value loses the version
@@ -900,7 +904,7 @@ mod tests {
         // The remove won the race, so the update reports the key as absent.
         assert!(result.is_none());
         // Only the local handle may remain.
-        wait_for_count(&replacement, 1);
+        wait_for_count(&tree, &replacement, 1);
     }
 
     #[test]

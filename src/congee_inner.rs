@@ -2,7 +2,7 @@ use std::{marker::PhantomData, ptr::NonNull, sync::Arc};
 
 use crate::{
     Allocator, DefaultAllocator, cast_ptr,
-    epoch::Guard,
+    epoch::{self, Guard, Reclaimer},
     error::{ArtError, OOMError},
     lock::ReadGuard,
     nodes::{BaseNode, ChildIsPayload, ChildIsSubNode, Node, Node4, NodePtr, NodeType, Parent},
@@ -23,6 +23,7 @@ pub(crate) struct CongeeInner<
     pub(crate) root: AtomicPtr<BaseNode>,
     drain_callback: Arc<dyn Fn([u8; K_LEN], usize)>,
     allocator: A,
+    reclaimer: Reclaimer,
     _pt_key: PhantomData<[u8; K_LEN]>,
 }
 
@@ -88,10 +89,11 @@ impl<const K_LEN: usize, A: Allocator + Clone + Send> Drop for CongeeInner<K_LEN
         };
         self.dfs_visitor_slow(&mut visitor).unwrap();
 
-        // see this: https://github.com/XiangpengHao/congee/issues/20
-        for _ in 0..128 {
-            crate::epoch::pin().flush();
-        }
+        // No safe guard can outlive the last owner of this tree, so every
+        // retirement in its private domain is eligible once destruction
+        // begins. Drain it directly instead of pinning the domain being
+        // collected or depending on readers of unrelated trees.
+        while self.reclaimer.advance() != 0 {}
     }
 }
 
@@ -103,6 +105,7 @@ impl<const K_LEN: usize, A: Allocator + Clone + Send> CongeeInner<K_LEN, A> {
             root: AtomicPtr::new(root.into_non_null().cast::<BaseNode>().as_ptr()),
             drain_callback,
             allocator,
+            reclaimer: Reclaimer::new(),
             _pt_key: PhantomData,
         }
     }
@@ -123,13 +126,28 @@ impl<const K_LEN: usize, A: Allocator + Clone + Send> CongeeInner<K_LEN, A> {
             root: AtomicPtr::new(root.as_ptr()),
             drain_callback,
             allocator,
+            reclaimer: Reclaimer::new(),
             _pt_key: PhantomData,
         }
+    }
+
+    #[inline]
+    pub(crate) fn pin(&self) -> Guard<'_> {
+        epoch::pin_in(&self.reclaimer)
+    }
+
+    #[inline]
+    fn assert_guard(&self, guard: &Guard<'_>) {
+        assert!(
+            guard.belongs_to(&self.reclaimer),
+            "Congee guard belongs to a different tree; acquire it with this tree's pin()"
+        );
     }
 }
 
 impl<const K_LEN: usize, A: Allocator + Clone + Send> CongeeInner<K_LEN, A> {
-    pub(crate) fn is_empty(&self, _guard: &Guard) -> bool {
+    pub(crate) fn is_empty(&self, guard: &Guard<'_>) -> bool {
+        self.assert_guard(guard);
         loop {
             let root = self.load_root();
             if let Ok(node) = BaseNode::read_lock(root) {
@@ -142,7 +160,8 @@ impl<const K_LEN: usize, A: Allocator + Clone + Send> CongeeInner<K_LEN, A> {
     }
 
     #[inline]
-    pub(crate) fn get(&self, key: &[u8; K_LEN], _guard: &Guard) -> Option<usize> {
+    pub(crate) fn get(&self, key: &[u8; K_LEN], guard: &Guard<'_>) -> Option<usize> {
+        self.assert_guard(guard);
         'outer: loop {
             let mut level = 0;
 
@@ -200,6 +219,7 @@ impl<const K_LEN: usize, A: Allocator + Clone + Send> CongeeInner<K_LEN, A> {
     }
 
     pub(crate) fn keys(&self) -> Vec<[u8; K_LEN]> {
+        let _pin = self.pin();
         loop {
             let mut visitor = LeafNodeKeyVisitor::<K_LEN> { keys: Vec::new() };
             if self.dfs_visitor_slow(&mut visitor).is_ok() {
@@ -277,7 +297,8 @@ impl<const K_LEN: usize, A: Allocator + Clone + Send> CongeeInner<K_LEN, A> {
     }
 
     /// Returns the number of values in the tree.
-    pub(crate) fn value_count(&self, _guard: &Guard) -> usize {
+    pub(crate) fn value_count(&self, guard: &Guard<'_>) -> usize {
+        self.assert_guard(guard);
         loop {
             let mut visitor = ValueCountVisitor::<K_LEN> { value_count: 0 };
             if self.dfs_visitor_slow(&mut visitor).is_ok() {
@@ -450,6 +471,7 @@ impl<const K_LEN: usize, A: Allocator + Clone + Send> CongeeInner<K_LEN, A> {
         tid: usize,
         guard: &Guard,
     ) -> Result<Option<usize>, OOMError> {
+        self.assert_guard(guard);
         let backoff = Backoff::new();
         loop {
             match self.insert_inner(k, &mut |_| tid, guard) {
@@ -475,6 +497,7 @@ impl<const K_LEN: usize, A: Allocator + Clone + Send> CongeeInner<K_LEN, A> {
     where
         F: FnMut(Option<usize>) -> usize,
     {
+        self.assert_guard(guard);
         let backoff = Backoff::new();
         loop {
             match self.insert_inner(k, insert_func, guard) {
@@ -496,8 +519,9 @@ impl<const K_LEN: usize, A: Allocator + Clone + Send> CongeeInner<K_LEN, A> {
         start: &[u8; K_LEN],
         end: &[u8; K_LEN],
         result: &mut [([u8; K_LEN], usize)],
-        _guard: &Guard,
+        guard: &Guard,
     ) -> usize {
+        self.assert_guard(guard);
         let root = self.load_root();
         let mut range_scan = RangeScan::new(start, end, result, root);
 
@@ -621,6 +645,7 @@ impl<const K_LEN: usize, A: Allocator + Clone + Send> CongeeInner<K_LEN, A> {
     where
         F: FnMut(usize) -> Option<usize>,
     {
+        self.assert_guard(guard);
         let backoff = Backoff::new();
         loop {
             match self.compute_if_present_inner(k, &mut *remapping_function, guard) {
@@ -637,6 +662,8 @@ impl<const K_LEN: usize, A: Allocator + Clone + Send> CongeeInner<K_LEN, A> {
     pub(crate) fn to_compact_set(&self) -> Vec<u8> {
         use crate::congee_compact_set::NodeType as CompactNodeType;
         use std::collections::VecDeque;
+
+        let _pin = self.pin();
 
         let mut buf = Vec::new();
         let mut queue = VecDeque::new();

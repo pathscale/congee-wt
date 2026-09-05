@@ -76,8 +76,8 @@ where
     /// let guard = tree.pin();
     /// ```
     #[inline]
-    pub fn pin(&self) -> epoch::Guard {
-        epoch::pin()
+    pub fn pin(&self) -> epoch::Guard<'_> {
+        self.inner.pin()
     }
 
     /// Create an empty [Art] tree.
