@@ -59,6 +59,7 @@ where
     /// let set = CongeeSet::<usize>::new_with_drainer(DefaultAllocator {}, drainer);
     /// let pin = set.pin();
     /// set.insert(1, &pin).unwrap();
+    /// drop(pin);
     /// drop(set);
     /// assert_eq!(deleted_key.load(std::sync::atomic::Ordering::Relaxed), 1);
     /// ```

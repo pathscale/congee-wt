@@ -116,6 +116,7 @@ where
     /// let tree = CongeeRaw::<usize, usize>::new_with_drainer(DefaultAllocator {}, drainer);
     /// let pin = tree.pin();
     /// tree.insert(1, 42, &pin).unwrap();
+    /// drop(pin);
     /// drop(tree);
     /// assert_eq!(deleted_key.load(std::sync::atomic::Ordering::Relaxed), 1);
     /// assert_eq!(deleted_value.load(std::sync::atomic::Ordering::Relaxed), 42);
