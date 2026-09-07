@@ -1,4 +1,5 @@
-use std::{fmt::Debug, ptr::NonNull};
+use core::fmt::Debug;
+use core::ptr::NonNull;
 
 use crate::{
     Allocator,
@@ -6,25 +7,25 @@ use crate::{
 };
 
 pub(crate) struct ChildIsPayload<'a> {
-    _marker: std::marker::PhantomData<&'a ()>,
+    _marker: core::marker::PhantomData<&'a ()>,
 }
 
 impl ChildIsPayload<'_> {
     pub(crate) fn new() -> Self {
         Self {
-            _marker: std::marker::PhantomData,
+            _marker: core::marker::PhantomData,
         }
     }
 }
 
 pub(crate) struct ChildIsSubNode<'a> {
-    _marker: std::marker::PhantomData<&'a ()>,
+    _marker: core::marker::PhantomData<&'a ()>,
 }
 
 impl ChildIsSubNode<'_> {
     pub(crate) fn new() -> Self {
         Self {
-            _marker: std::marker::PhantomData,
+            _marker: core::marker::PhantomData,
         }
     }
 }
@@ -89,7 +90,7 @@ pub(crate) struct NodePtr {
 }
 
 impl Debug for NodePtr {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         cast_ptr!(self => {
             Payload(val) => {
                 write!(f, "Payload: {val:?}")
@@ -159,13 +160,13 @@ impl<'a, N: Node, A: Allocator> AllocatedNode<'a, N, A> {
 
     pub(crate) fn into_note_ptr(self) -> NodePtr {
         let ptr = self.ptr;
-        std::mem::forget(self);
-        unsafe { NodePtr::from_node(std::mem::transmute::<NonNull<N>, NonNull<BaseNode>>(ptr)) }
+        core::mem::forget(self);
+        unsafe { NodePtr::from_node(core::mem::transmute::<NonNull<N>, NonNull<BaseNode>>(ptr)) }
     }
 
     pub(crate) fn into_non_null(self) -> NonNull<N> {
         let ptr = self.ptr;
-        std::mem::forget(self);
+        core::mem::forget(self);
         ptr
     }
 }
@@ -173,8 +174,8 @@ impl<'a, N: Node, A: Allocator> AllocatedNode<'a, N, A> {
 impl<'a, N: Node, A: Allocator> Drop for AllocatedNode<'a, N, A> {
     fn drop(&mut self) {
         unsafe {
-            std::ptr::drop_in_place(self.ptr.as_mut());
-            let ptr = std::ptr::NonNull::new(self.ptr.as_ptr() as *mut u8).unwrap();
+            core::ptr::drop_in_place(self.ptr.as_mut());
+            let ptr = core::ptr::NonNull::new(self.ptr.as_ptr() as *mut u8).unwrap();
             let layout = N::get_type().node_layout();
             self.allocator.deallocate(ptr, layout);
         }

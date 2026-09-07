@@ -1,5 +1,6 @@
 use super::NodePtr;
 use super::base_node::{BaseNode, Node, NodeIter, NodeType};
+use alloc::vec::Vec;
 
 #[repr(C)]
 #[repr(align(8))]
@@ -10,10 +11,10 @@ pub(crate) struct Node4 {
 }
 
 #[cfg(not(feature = "shuttle"))]
-const _: () = assert!(std::mem::size_of::<Node4>() == 56);
+const _: () = assert!(core::mem::size_of::<Node4>() == 56);
 
 #[cfg(not(feature = "shuttle"))]
-const _: () = assert!(std::mem::align_of::<Node4>() == 8);
+const _: () = assert!(core::mem::align_of::<Node4>() == 8);
 
 pub(crate) struct Node4Iter<'a> {
     start: u8,

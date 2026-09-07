@@ -1,4 +1,6 @@
-use std::{marker::PhantomData, sync::Arc};
+use alloc::sync::Arc;
+use alloc::vec::Vec;
+use core::marker::PhantomData;
 
 use crate::{Allocator, CongeeInner, DefaultAllocator, epoch, error::OOMError, stats};
 
@@ -233,7 +235,7 @@ where
         let start: [u8; 8] = start.to_be_bytes();
         let end: [u8; 8] = end.to_be_bytes();
         let result_ref = unsafe {
-            std::slice::from_raw_parts_mut(
+            core::slice::from_raw_parts_mut(
                 result.as_mut_ptr() as *mut ([u8; 8], usize),
                 result.len(),
             )

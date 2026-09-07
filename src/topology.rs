@@ -4,10 +4,11 @@
 //! codec. Durable framing, checksums, generations, and write-ahead logging are
 //! intentionally owned by the caller.
 
-use std::fmt;
-use std::marker::PhantomData;
-use std::ptr::NonNull;
-use std::sync::Arc;
+use alloc::sync::Arc;
+use alloc::vec::Vec;
+use core::fmt;
+use core::marker::PhantomData;
+use core::ptr::NonNull;
 
 use crate::cast_ptr;
 use crate::congee_inner::CongeeInner;
@@ -169,7 +170,7 @@ impl fmt::Display for Error {
     }
 }
 
-impl std::error::Error for Error {}
+impl core::error::Error for Error {}
 
 impl<V> Topology<V> {
     /// Validate node kinds, compressed paths, slots, and Node48 free lists.
@@ -495,9 +496,9 @@ unsafe fn destroy_tree<A: Allocator>(
 
 #[cfg(test)]
 mod tests {
+    use core::sync::atomic::{AtomicUsize, Ordering};
     use std::alloc::Layout;
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
     use crate::error::OOMError;

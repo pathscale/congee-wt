@@ -1,4 +1,7 @@
-use std::{marker::PhantomData, ptr::NonNull, sync::Arc};
+use alloc::sync::Arc;
+use alloc::vec::Vec;
+use core::marker::PhantomData;
+use core::ptr::NonNull;
 
 use crate::{
     Allocator, DefaultAllocator, cast_ptr,
@@ -9,10 +12,10 @@ use crate::{
     range_scan::RangeScan,
     utils::{Backoff, KeyTracker},
 };
+#[cfg(not(all(feature = "shuttle", test)))]
+use core::sync::atomic::AtomicPtr;
 #[cfg(all(feature = "shuttle", test))]
 use shuttle::sync::atomic::AtomicPtr;
-#[cfg(not(all(feature = "shuttle", test)))]
-use std::sync::atomic::AtomicPtr;
 
 /// Raw interface to the ART tree.
 /// The `Art` is a wrapper around the `RawArt` that provides a safe interface.
@@ -112,7 +115,7 @@ impl<const K_LEN: usize, A: Allocator + Clone + Send> CongeeInner<K_LEN, A> {
 
     #[inline]
     pub(crate) fn load_root(&self) -> NonNull<BaseNode> {
-        let root_ptr = self.root.load(std::sync::atomic::Ordering::Relaxed);
+        let root_ptr = self.root.load(core::sync::atomic::Ordering::Relaxed);
         // SAFETY: The root pointer is always non-null after initialization.
         unsafe { NonNull::new_unchecked(root_ptr) }
     }
@@ -612,7 +615,7 @@ impl<const K_LEN: usize, A: Allocator + Clone + Send> CongeeInner<K_LEN, A> {
                                 let allocator = self.allocator.clone();
                                 guard.defer(move || unsafe {
                                     let ptr = NonNull::from(write_n.as_mut());
-                                    std::mem::forget(write_n);
+                                    core::mem::forget(write_n);
                                     BaseNode::drop_node(ptr, allocator);
                                 });
                             } else {
@@ -661,7 +664,7 @@ impl<const K_LEN: usize, A: Allocator + Clone + Send> CongeeInner<K_LEN, A> {
 
     pub(crate) fn to_compact_set(&self) -> Vec<u8> {
         use crate::congee_compact_set::NodeType as CompactNodeType;
-        use std::collections::VecDeque;
+        use alloc::collections::VecDeque;
 
         let _pin = self.pin();
 

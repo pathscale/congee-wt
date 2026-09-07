@@ -1,7 +1,15 @@
+#![cfg_attr(not(any(test, feature = "std")), no_std)]
 #![doc = include_str!("../README.md")]
 #![allow(clippy::comparison_chain)]
 #![allow(clippy::len_without_is_empty)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
+
+// The crate does not link `std` unless asked. Tests always do: they spawn
+// threads and time things, which is what a concurrency test is made of.
+#[cfg(any(test, feature = "std"))]
+extern crate std;
+
+extern crate alloc;
 
 mod congee;
 pub mod congee_compact_set;
@@ -22,7 +30,7 @@ mod tests;
 
 /// Types needed to safely access shared data concurrently.
 pub mod epoch {
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use core::sync::atomic::{AtomicUsize, Ordering};
 
     const RECLAIM_BATCH: usize = 256;
 
@@ -87,7 +95,7 @@ pub mod epoch {
         }
 
         pub(crate) fn belongs_to(&self, reclaimer: &Reclaimer) -> bool {
-            std::ptr::eq(self.reclaimer, reclaimer)
+            core::ptr::eq(self.reclaimer, reclaimer)
         }
     }
 
@@ -102,8 +110,8 @@ pub mod epoch {
     #[cfg(test)]
     mod tests {
         use super::{RECLAIM_BATCH, Reclaimer, pin_in};
+        use core::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::Arc;
-        use std::sync::atomic::{AtomicUsize, Ordering};
 
         #[test]
         fn automatic_collection_is_bounded_to_one_batch() {

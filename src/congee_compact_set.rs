@@ -63,7 +63,7 @@
 //!
 //! The structure is created by converting from a `CongeeSet` using `to_compact_set()`.
 
-use std::marker::PhantomData;
+use core::marker::PhantomData;
 
 pub struct NodeType(pub u8);
 
@@ -226,8 +226,8 @@ impl CompactSetStats {
     }
 }
 
-impl std::fmt::Display for CompactSetStats {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for CompactSetStats {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         writeln!(
             f,
             "╭─────────────────────────────────────────────────────────────────╮"
@@ -421,7 +421,7 @@ where
     data: &'a [u8],
     _phantom: PhantomData<K>,
     #[cfg(feature = "access-stats")]
-    access_stats: std::sync::Arc<std::sync::Mutex<AccessStats>>,
+    access_stats: alloc::sync::Arc<std::sync::Mutex<AccessStats>>,
 }
 
 #[cfg(feature = "access-stats")]
@@ -470,7 +470,7 @@ where
             data,
             _phantom: PhantomData,
             #[cfg(feature = "access-stats")]
-            access_stats: std::sync::Arc::new(std::sync::Mutex::new(AccessStats::default())),
+            access_stats: alloc::sync::Arc::new(std::sync::Mutex::new(AccessStats::default())),
         }
     }
 
@@ -512,7 +512,7 @@ where
         node_type: u8,
     ) -> Option<usize> {
         unsafe {
-            use std::arch::x86_64::{
+            use core::arch::x86_64::{
                 _mm_cmpeq_epi8, _mm_loadu_si128, _mm_movemask_epi8, _mm_set1_epi8,
             };
 
@@ -670,7 +670,7 @@ where
 
                     // Read bitmap
                     let bitmap = unsafe {
-                        std::slice::from_raw_parts(self.data.as_ptr().add(bitmap_start), 32)
+                        core::slice::from_raw_parts(self.data.as_ptr().add(bitmap_start), 32)
                     };
                     let bitmap_array = unsafe { *(bitmap.as_ptr() as *const [u8; 32]) };
 
@@ -832,6 +832,8 @@ where
     }
 
     /// Print the compact set in a human readable format
+    /// Needs somewhere to print to, which a `no_std` build does not have.
+    #[cfg(feature = "std")]
     pub fn debug_print(&self) {
         println!("\n=== CongeeCompactSet Debug Structure ===");
         println!("Total nodes: {}", self.node_count());
