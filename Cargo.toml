@@ -19,8 +19,8 @@ path = "src/lib.rs"
 members = ["fuzz"]
 
 [dependencies]
-ps-reclaim = { version = "^0.1" }
-serde = { version = "1.0.219", features = ["derive"], optional = true }
+ps-reclaim = { version = "^0.1, >=0.1.4", default-features = false, features = ["libc", "spin"] }
+serde = { version = "1.0.219", default-features = false, features = ["derive", "alloc"], optional = true }
 
 [dev-dependencies]
 tracing-subscriber = "0.3"
@@ -56,6 +56,11 @@ path = "bench/compact_set.rs"
 harness = false
 
 [features]
+default = ["std"]
+# Off, this crate does not link `std`. What it costs: `debug_print`, which needs
+# somewhere to print to, and `thread::yield_now` in the spin backoff, which
+# falls back to a spin because there is no scheduler to yield to.
+std = ["ps-reclaim/std", "serde?/std"]
 flamegraph = ["shumai/flamegraph"]
 perf = ["shumai/perf"]
 stats = ["serde"]

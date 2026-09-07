@@ -1,4 +1,9 @@
-use std::{collections::HashMap, fmt::Display, ptr::NonNull};
+use alloc::collections::BTreeMap;
+use alloc::format;
+use alloc::string::String;
+use alloc::vec::Vec;
+use core::fmt::Display;
+use core::ptr::NonNull;
 
 use crate::{
     Allocator,
@@ -9,7 +14,7 @@ use crate::{
 #[cfg_attr(feature = "stats", derive(serde::Serialize))]
 #[derive(Default, Debug, Clone)]
 pub struct NodeStats {
-    levels: HashMap<usize, LevelStats>,
+    levels: BTreeMap<usize, LevelStats>,
     kv_pairs: usize,
     /// Global prefix length distribution [length_0, length_1, ..., length_8]
     prefix_distribution: [usize; 9],
@@ -49,7 +54,7 @@ impl NodeStats {
 }
 
 impl Display for NodeStats {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         fn calc_load_factor(n: &NodeInfo, scale: usize) -> f64 {
             if n.node_count == 0 {
                 return 0.0;

@@ -6,8 +6,8 @@ use crate::{
     nodes::{BaseNode, NodePtr},
     utils::KeyTracker,
 };
-use std::cmp;
-use std::ptr::NonNull;
+use core::cmp;
+use core::ptr::NonNull;
 
 enum PrefixCheckEqualsResult {
     BothMatch,

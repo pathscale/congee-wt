@@ -2,9 +2,9 @@ use crate::congee_raw::CongeeRaw;
 use crate::error::{ArtError, OOMError};
 use crate::nodes::{BaseNode, NodePtr};
 use crate::{CongeeSet, cast_ptr};
+use alloc::sync::Arc;
 use core::cell::Cell;
 use core::fmt;
-use std::sync::Arc;
 
 const SPIN_LIMIT: u32 = 6;
 const YIELD_LIMIT: u32 = 10;
@@ -29,7 +29,7 @@ impl Backoff {
     #[inline]
     pub(crate) fn spin(&self) {
         for _ in 0..1 << self.step.get().min(SPIN_LIMIT) {
-            std::hint::spin_loop();
+            core::hint::spin_loop();
         }
 
         if self.step.get() <= SPIN_LIMIT {
@@ -44,14 +44,19 @@ impl Backoff {
     pub(crate) fn snooze(&self) {
         if self.step.get() <= SPIN_LIMIT {
             for _ in 0..1 << self.step.get() {
-                std::hint::spin_loop();
+                core::hint::spin_loop();
             }
         } else {
             #[cfg(all(feature = "shuttle", test))]
             shuttle::thread::yield_now();
 
-            #[cfg(not(all(feature = "shuttle", test)))]
+            // No scheduler to yield to without `std`, so spin instead. It is
+            // what the fast path above is already doing, minus the syscall.
+            #[cfg(all(not(all(feature = "shuttle", test)), feature = "std"))]
             ::std::thread::yield_now();
+
+            #[cfg(all(not(all(feature = "shuttle", test)), not(feature = "std")))]
+            core::hint::spin_loop();
         }
 
         if self.step.get() <= YIELD_LIMIT {
@@ -175,40 +180,40 @@ unsafe impl Sync for DefaultAllocator {}
 /// We should use the `Allocator` trait in the std, but it is not stable yet.
 /// https://github.com/rust-lang/rust/issues/32838
 pub trait Allocator {
-    fn allocate(&self, layout: std::alloc::Layout) -> Result<std::ptr::NonNull<[u8]>, OOMError>;
+    fn allocate(&self, layout: core::alloc::Layout) -> Result<core::ptr::NonNull<[u8]>, OOMError>;
     fn allocate_zeroed(
         &self,
-        layout: std::alloc::Layout,
-    ) -> Result<std::ptr::NonNull<[u8]>, OOMError> {
+        layout: core::alloc::Layout,
+    ) -> Result<core::ptr::NonNull<[u8]>, OOMError> {
         let ptr = self.allocate(layout)?;
         unsafe {
-            std::ptr::write_bytes(ptr.as_ptr() as *mut u8, 0, layout.size());
+            core::ptr::write_bytes(ptr.as_ptr() as *mut u8, 0, layout.size());
         }
         Ok(ptr)
     }
     /// # Safety
     /// The caller must ensure that the pointer is valid and that the layout is correct.
     /// The pointer must allocated by this allocator.
-    unsafe fn deallocate(&self, ptr: std::ptr::NonNull<u8>, layout: std::alloc::Layout);
+    unsafe fn deallocate(&self, ptr: core::ptr::NonNull<u8>, layout: core::alloc::Layout);
 }
 
 impl Allocator for DefaultAllocator {
-    fn allocate(&self, layout: std::alloc::Layout) -> Result<std::ptr::NonNull<[u8]>, OOMError> {
-        let ptr = unsafe { std::alloc::alloc(layout) };
-        let ptr_slice = std::ptr::slice_from_raw_parts_mut(ptr, layout.size());
-        Ok(std::ptr::NonNull::new(ptr_slice).unwrap())
+    fn allocate(&self, layout: core::alloc::Layout) -> Result<core::ptr::NonNull<[u8]>, OOMError> {
+        let ptr = unsafe { alloc::alloc::alloc(layout) };
+        let ptr_slice = core::ptr::slice_from_raw_parts_mut(ptr, layout.size());
+        Ok(core::ptr::NonNull::new(ptr_slice).unwrap())
     }
 
-    unsafe fn deallocate(&self, ptr: std::ptr::NonNull<u8>, layout: std::alloc::Layout) {
+    unsafe fn deallocate(&self, ptr: core::ptr::NonNull<u8>, layout: core::alloc::Layout) {
         unsafe {
-            std::alloc::dealloc(ptr.as_ptr(), layout);
+            alloc::alloc::dealloc(ptr.as_ptr(), layout);
         }
     }
 }
 
 struct AllocStats {
-    allocated: std::sync::atomic::AtomicUsize,
-    deallocated: std::sync::atomic::AtomicUsize,
+    allocated: core::sync::atomic::AtomicUsize,
+    deallocated: core::sync::atomic::AtomicUsize,
 }
 
 #[derive(Clone)]
@@ -222,26 +227,26 @@ impl<A: Allocator + Clone + Send + 'static> MemoryStatsAllocator<A> {
         Self {
             inner,
             stats: Arc::new(AllocStats {
-                allocated: std::sync::atomic::AtomicUsize::new(0),
-                deallocated: std::sync::atomic::AtomicUsize::new(0),
+                allocated: core::sync::atomic::AtomicUsize::new(0),
+                deallocated: core::sync::atomic::AtomicUsize::new(0),
             }),
         }
     }
 }
 
 impl<A: Allocator + Clone + Send + 'static> Allocator for MemoryStatsAllocator<A> {
-    fn allocate(&self, layout: std::alloc::Layout) -> Result<std::ptr::NonNull<[u8]>, OOMError> {
+    fn allocate(&self, layout: core::alloc::Layout) -> Result<core::ptr::NonNull<[u8]>, OOMError> {
         let ptr = self.inner.allocate(layout)?;
         self.stats
             .allocated
-            .fetch_add(layout.size(), std::sync::atomic::Ordering::Relaxed);
+            .fetch_add(layout.size(), core::sync::atomic::Ordering::Relaxed);
         Ok(ptr)
     }
 
-    unsafe fn deallocate(&self, ptr: std::ptr::NonNull<u8>, layout: std::alloc::Layout) {
+    unsafe fn deallocate(&self, ptr: core::ptr::NonNull<u8>, layout: core::alloc::Layout) {
         self.stats
             .deallocated
-            .fetch_add(layout.size(), std::sync::atomic::Ordering::Relaxed);
+            .fetch_add(layout.size(), core::sync::atomic::Ordering::Relaxed);
         unsafe { self.inner.deallocate(ptr, layout) }
     }
 }
@@ -257,14 +262,14 @@ where
         self.allocator()
             .stats
             .allocated
-            .load(std::sync::atomic::Ordering::Relaxed)
+            .load(core::sync::atomic::Ordering::Relaxed)
     }
 
     pub fn deallocated_bytes(&self) -> usize {
         self.allocator()
             .stats
             .deallocated
-            .load(std::sync::atomic::Ordering::Relaxed)
+            .load(core::sync::atomic::Ordering::Relaxed)
     }
 }
 
@@ -277,14 +282,14 @@ where
         self.allocator()
             .stats
             .allocated
-            .load(std::sync::atomic::Ordering::Relaxed)
+            .load(core::sync::atomic::Ordering::Relaxed)
     }
 
     pub fn deallocated_bytes(&self) -> usize {
         self.allocator()
             .stats
             .deallocated
-            .load(std::sync::atomic::Ordering::Relaxed)
+            .load(core::sync::atomic::Ordering::Relaxed)
     }
 }
 
@@ -294,8 +299,8 @@ pub(crate) mod leak_check {
 
     use crate::error::OOMError;
     use crate::{Allocator, DefaultAllocator};
+    use core::ptr::NonNull;
     use std::collections::HashSet;
-    use std::ptr::NonNull;
     use std::sync::{Arc, Mutex};
 
     struct LeakCheckAllocatorInner {
@@ -350,8 +355,8 @@ pub(crate) mod leak_check {
     impl Allocator for LeakCheckAllocator {
         fn allocate(
             &self,
-            layout: std::alloc::Layout,
-        ) -> Result<std::ptr::NonNull<[u8]>, OOMError> {
+            layout: core::alloc::Layout,
+        ) -> Result<core::ptr::NonNull<[u8]>, OOMError> {
             let ptr = self.inner.inner.allocate(layout)?;
             self.inner
                 .allocated
@@ -361,7 +366,7 @@ pub(crate) mod leak_check {
             Ok(ptr)
         }
 
-        unsafe fn deallocate(&self, ptr: std::ptr::NonNull<u8>, layout: std::alloc::Layout) {
+        unsafe fn deallocate(&self, ptr: core::ptr::NonNull<u8>, layout: core::alloc::Layout) {
             self.inner
                 .allocated
                 .lock()

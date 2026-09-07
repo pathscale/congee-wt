@@ -1,8 +1,9 @@
+use alloc::vec::Vec;
+use core::ptr::NonNull;
+#[cfg(not(all(feature = "shuttle", test)))]
+use core::sync::atomic::{AtomicPtr, AtomicU32, Ordering};
 #[cfg(all(feature = "shuttle", test))]
 use shuttle::sync::atomic::{AtomicPtr, AtomicU32, Ordering};
-use std::ptr::NonNull;
-#[cfg(not(all(feature = "shuttle", test)))]
-use std::sync::atomic::{AtomicPtr, AtomicU32, Ordering};
 
 use crate::{
     Allocator,
@@ -49,26 +50,26 @@ impl NodeType {
         }
     }
 
-    pub(crate) fn node_layout(&self) -> std::alloc::Layout {
+    pub(crate) fn node_layout(&self) -> core::alloc::Layout {
         match *self {
-            NodeType::N4 => std::alloc::Layout::from_size_align(
-                std::mem::size_of::<Node4>(),
-                std::mem::align_of::<Node4>(),
+            NodeType::N4 => core::alloc::Layout::from_size_align(
+                core::mem::size_of::<Node4>(),
+                core::mem::align_of::<Node4>(),
             )
             .unwrap(),
-            NodeType::N16 => std::alloc::Layout::from_size_align(
-                std::mem::size_of::<Node16>(),
-                std::mem::align_of::<Node16>(),
+            NodeType::N16 => core::alloc::Layout::from_size_align(
+                core::mem::size_of::<Node16>(),
+                core::mem::align_of::<Node16>(),
             )
             .unwrap(),
-            NodeType::N48 => std::alloc::Layout::from_size_align(
-                std::mem::size_of::<Node48>(),
-                std::mem::align_of::<Node48>(),
+            NodeType::N48 => core::alloc::Layout::from_size_align(
+                core::mem::size_of::<Node48>(),
+                core::mem::align_of::<Node48>(),
             )
             .unwrap(),
-            NodeType::N256 => std::alloc::Layout::from_size_align(
-                std::mem::size_of::<Node256>(),
-                std::mem::align_of::<Node256>(),
+            NodeType::N256 => core::alloc::Layout::from_size_align(
+                core::mem::size_of::<Node256>(),
+                core::mem::align_of::<Node256>(),
             )
             .unwrap(),
         }
@@ -148,10 +149,10 @@ impl NodeMeta {
 #[cfg(not(feature = "shuttle"))]
 mod layout_assertion {
     use super::*;
-    const _: () = assert!(std::mem::size_of::<NodeMeta>() == 12);
-    const _: () = assert!(std::mem::align_of::<NodeMeta>() == 2);
-    const _: () = assert!(std::mem::size_of::<BaseNode>() == 16);
-    const _: () = assert!(std::mem::align_of::<BaseNode>() == 4);
+    const _: () = assert!(core::mem::size_of::<NodeMeta>() == 12);
+    const _: () = assert!(core::mem::align_of::<NodeMeta>() == 2);
+    const _: () = assert!(core::mem::size_of::<BaseNode>() == 16);
+    const _: () = assert!(core::mem::align_of::<BaseNode>() == 4);
 }
 
 macro_rules! gen_method {
@@ -251,7 +252,7 @@ impl BaseNode {
         let base_ptr = ptr.as_ptr() as *mut BaseNode;
         let node = BaseNode::new(N::get_type(), prefix);
         unsafe {
-            std::ptr::write(base_ptr, node);
+            core::ptr::write(base_ptr, node);
 
             if matches!(N::get_type(), NodeType::N48) {
                 let mem = base_ptr as *mut Node48;
@@ -288,7 +289,7 @@ impl BaseNode {
     /// Here we must get a clone of allocator because the drop_node might be called in epoch guard
     pub(crate) unsafe fn drop_node<A: Allocator>(node: NonNull<BaseNode>, allocator: A) {
         let layout = unsafe { node.as_ref() }.get_type().node_layout();
-        let ptr = std::ptr::NonNull::new(node.as_ptr() as *mut u8).unwrap();
+        let ptr = core::ptr::NonNull::new(node.as_ptr() as *mut u8).unwrap();
         unsafe {
             allocator.deallocate(ptr, layout);
         }
@@ -422,7 +423,7 @@ impl BaseNode {
 
         write_n.mark_obsolete();
         let delete_n = write_n.as_mut() as *mut CurT as usize;
-        std::mem::forget(write_n);
+        core::mem::forget(write_n);
         let allocator: A = allocator.clone();
         guard.defer(move || unsafe {
             let delete_n = NonNull::new(delete_n as *mut BaseNode).unwrap();

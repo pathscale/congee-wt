@@ -1,10 +1,12 @@
-use std::{marker::PhantomData, ptr::NonNull, sync::atomic::Ordering};
+use core::marker::PhantomData;
+use core::ptr::NonNull;
+use core::sync::atomic::Ordering;
 
 #[cfg(all(feature = "shuttle", test))]
 use shuttle::sync::atomic::fence;
 
 #[cfg(not(all(feature = "shuttle", test)))]
-use std::sync::atomic::fence;
+use core::sync::atomic::fence;
 
 use crate::{
     error::ArtError,

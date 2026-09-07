@@ -1,4 +1,8 @@
-use std::{marker::PhantomData, ptr::with_exposed_provenance, sync::Arc};
+use alloc::sync::Arc;
+use alloc::vec;
+use alloc::vec::Vec;
+use core::marker::PhantomData;
+use core::ptr::with_exposed_provenance;
 
 use crate::{CongeeInner, DefaultAllocator, epoch, error::OOMError};
 

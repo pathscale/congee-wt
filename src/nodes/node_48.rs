@@ -1,4 +1,5 @@
 use crate::cast_ptr;
+use alloc::vec::Vec;
 
 use super::{
     NodePtr,
@@ -18,10 +19,10 @@ pub(crate) struct Node48 {
 }
 
 #[cfg(not(feature = "shuttle"))]
-const _: () = assert!(std::mem::size_of::<Node48>() == 664);
+const _: () = assert!(core::mem::size_of::<Node48>() == 664);
 
 #[cfg(not(feature = "shuttle"))]
-const _: () = assert!(std::mem::align_of::<Node48>() == 8);
+const _: () = assert!(core::mem::align_of::<Node48>() == 8);
 
 impl Node48 {
     pub(crate) fn init_empty(&mut self) {

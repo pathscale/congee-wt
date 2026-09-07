@@ -1,5 +1,5 @@
-use std::error::Error;
-use std::fmt::{self, Debug, Display, Formatter};
+use core::error::Error;
+use core::fmt::{self, Debug, Display, Formatter};
 
 #[derive(Debug)]
 pub(crate) enum ArtError {

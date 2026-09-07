@@ -2,6 +2,7 @@ use super::{
     base_node::{BaseNode, Node, NodeIter, NodeType},
     node_ptr::NodePtr,
 };
+use alloc::vec::Vec;
 
 #[repr(C)]
 #[repr(align(8))]
@@ -12,9 +13,9 @@ pub(crate) struct Node256 {
 }
 
 #[cfg(not(feature = "shuttle"))]
-const _: () = assert!(std::mem::size_of::<Node256>() == 2096);
+const _: () = assert!(core::mem::size_of::<Node256>() == 2096);
 #[cfg(not(feature = "shuttle"))]
-const _: () = assert!(std::mem::align_of::<Node256>() == 8);
+const _: () = assert!(core::mem::align_of::<Node256>() == 8);
 
 impl Node256 {
     #[inline]

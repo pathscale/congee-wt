@@ -2,9 +2,10 @@ use super::{
     NodePtr,
     base_node::{BaseNode, Node, NodeIter, NodeType},
 };
+use alloc::vec::Vec;
 
 #[cfg(target_arch = "x86_64")]
-use std::arch::x86_64::*;
+use core::arch::x86_64::*;
 
 #[repr(C)]
 #[repr(align(8))] // Node 16 doesn't need to align to 64 bc it occupies 3 cache lines anyway
@@ -15,10 +16,10 @@ pub(crate) struct Node16 {
 }
 
 #[cfg(not(feature = "shuttle"))]
-const _: () = assert!(std::mem::size_of::<Node16>() == 160);
+const _: () = assert!(core::mem::size_of::<Node16>() == 160);
 
 #[cfg(not(feature = "shuttle"))]
-const _: () = assert!(std::mem::align_of::<Node16>() == 8);
+const _: () = assert!(core::mem::align_of::<Node16>() == 8);
 
 impl Node16 {
     fn get_insert_pos(&self, key: u8) -> usize {
