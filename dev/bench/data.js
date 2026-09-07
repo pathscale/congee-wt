@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788591542186,
+  "lastUpdate": 1788780754341,
   "repoUrl": "https://github.com/pathscale/congee-wt",
   "entries": {
     "Congee basic op performance": [
@@ -7792,6 +7792,44 @@ window.BENCHMARK_DATA = {
           {
             "name": "ScanOnly",
             "value": 4425808,
+            "unit": "QPS"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "no-reply@pathscale.com",
+            "name": "meh"
+          },
+          "committer": {
+            "email": "cbergstrom@pathscale.com",
+            "name": "pathscale",
+            "username": "pathscale"
+          },
+          "distinct": true,
+          "id": "6d6722557ba3e2661a836a33d03c8257aabef442",
+          "message": "Say the ps-reclaim requirement as a caret\n\n`\"^0.1, >=0.1.4\"` and `\"0.1.4\"` describe the same set. The second is the form\nthe rest of the house uses.\n\n    cargo test                     103 passed\n    cargo test --no-default-features  103 passed",
+          "timestamp": "2026-09-07T18:29:33+07:00",
+          "tree_id": "e59e4417ce7a27cd9e1d449d116e4a600b8af866",
+          "url": "https://github.com/pathscale/congee-wt/commit/6d6722557ba3e2661a836a33d03c8257aabef442"
+        },
+        "date": 1788780752828,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "ScanOnly",
+            "value": 3747877,
+            "unit": "QPS"
+          },
+          {
+            "name": "UpdateOnly",
+            "value": 18018140,
+            "unit": "QPS"
+          },
+          {
+            "name": "ReadOnly",
+            "value": 10101803,
             "unit": "QPS"
           }
         ]
