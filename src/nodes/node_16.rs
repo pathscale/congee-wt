@@ -4,7 +4,7 @@ use super::{
 };
 use alloc::vec::Vec;
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", target_feature = "sse2"))]
 use core::arch::x86_64::*;
 
 #[repr(C)]
@@ -33,36 +33,30 @@ impl Node16 {
         pos
     }
 
-    #[cfg(target_arch = "x86_64")]
+    #[cfg(all(target_arch = "x86_64", target_feature = "sse2"))]
     fn get_child_pos_simd(&self, key: u8) -> Option<usize> {
-        if is_x86_feature_detected!("sse2") {
-            unsafe {
-                let key_vec = _mm_set1_epi8(key as i8);
-                let keys_vec = _mm_loadu_si128(self.keys.as_ptr() as *const __m128i);
-                let cmp = _mm_cmpeq_epi8(key_vec, keys_vec);
-                let mask = _mm_movemask_epi8(cmp) as u16;
-
-                if mask != 0 {
-                    let pos = mask.trailing_zeros() as usize;
-                    // Use branchless comparison to avoid pipeline stalls
-                    let count = self.base.meta.count();
-                    let valid = (pos < count) as usize;
-                    if valid != 0 {
-                        return Some(pos);
-                    }
+        // SAFETY: SSE2 is enabled for this target, and the unaligned load reads
+        // exactly the initialized 16-byte key array. Only live slots are used.
+        unsafe {
+            let key_vec = _mm_set1_epi8(key as i8);
+            let keys_vec = _mm_loadu_si128(self.keys.as_ptr() as *const __m128i);
+            let mask = _mm_movemask_epi8(_mm_cmpeq_epi8(key_vec, keys_vec)) as u16;
+            if mask != 0 {
+                let pos = mask.trailing_zeros() as usize;
+                if pos < self.base.meta.count() {
+                    return Some(pos);
                 }
-                None
             }
-        } else {
-            self.get_child_pos_fallback(key)
+            None
         }
     }
 
-    #[cfg(not(target_arch = "x86_64"))]
+    #[cfg(not(all(target_arch = "x86_64", target_feature = "sse2")))]
     fn get_child_pos_simd(&self, key: u8) -> Option<usize> {
         self.get_child_pos_fallback(key)
     }
 
+    #[cfg(any(test, not(all(target_arch = "x86_64", target_feature = "sse2"))))]
     #[inline]
     fn get_child_pos_fallback(&self, key: u8) -> Option<usize> {
         self.keys
@@ -227,6 +221,22 @@ mod tests {
             base: BaseNode::new(NodeType::N16, &[]),
             children: [NodePtr::from_payload(0); 16],
             keys: [0; 16],
+        }
+    }
+
+    #[test]
+    fn lookup_matches_scalar_for_all_keys_and_live_counts() {
+        let mut node = create_test_node();
+        for count in 0..=16 {
+            for key in 0..=255 {
+                assert_eq!(
+                    node.get_child_pos_simd(key),
+                    node.get_child_pos_fallback(key)
+                );
+            }
+            if count < 16 {
+                node.insert((count * 17) as u8, NodePtr::from_payload(count + 1));
+            }
         }
     }
 
