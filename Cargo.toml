@@ -1,6 +1,6 @@
 [package]
 name = "congee-wt"
-version = "0.4.5"
+version = "0.4.6"
 edition = "2024"
 description = "A Rust implementation of ART-OLC concurrent adaptive radix tree."
 keywords = ["ART", "adaptive-radix-tree", "concurrent"]
@@ -19,8 +19,14 @@ path = "src/lib.rs"
 members = ["fuzz"]
 
 [dependencies]
-ps-reclaim = { version = "0.1.4", default-features = false, features = ["libc", "spin"] }
+ps-reclaim = { version = "0.1.4", default-features = false, features = ["spin"] }
 serde = { version = "1.0.219", default-features = false, features = ["derive", "alloc"], optional = true }
+
+[target.'cfg(unix)'.dependencies]
+ps-reclaim = { version = "^0.1.4", default-features = false, features = ["libc"] }
+
+[target.'cfg(windows)'.dependencies]
+ps-reclaim = { version = "^0.1.4", default-features = false, features = ["windows-sys"] }
 
 [dev-dependencies]
 tracing-subscriber = "0.3"

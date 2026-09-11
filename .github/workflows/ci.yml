@@ -21,6 +21,18 @@ jobs:
     - name: Check
       run: cargo clippy --all-features -- -D warnings
   
+  no_std:
+    runs-on: ubicloud-standard-2
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-gnu
+      - uses: Swatinem/rust-cache@v2
+      - run: sh scripts/check-no-std.sh -p congee-wt --lib --no-default-features
+      - run: NO_STD_TARGET=x86_64-pc-windows-gnu sh scripts/check-no-std.sh -p congee-wt --lib --no-default-features
+
   fmt:
     runs-on: ubicloud-standard-4
     timeout-minutes: 30
@@ -134,7 +146,7 @@ jobs:
  
   publish:
     if: github.event_name == 'push' && github.ref == 'refs/heads/master'
-    needs: [check, fmt, test_sans, shuttle]
+    needs: [check, fmt, no_std, test_sans, shuttle]
     runs-on: ubicloud-standard-2
     timeout-minutes: 30
     steps:

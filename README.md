@@ -15,6 +15,15 @@ due to this specialization, congee has great performance -- basic operations are
 The codebase is extensively tested with [{address|leak} sanitizer](https://doc.rust-lang.org/beta/unstable-book/compiler-flags/sanitizer.html) as well as [libfuzzer](https://llvm.org/docs/LibFuzzer.html).
 Congee's performance is continuously tracked [here](https://xiangpenghao.github.io/congee/dev/bench/). 
 
+### Building without Rust std
+
+Use `congee-wt = { version = "^0.4.6", default-features = false }` for
+`no_std` with alloc. Unix and Windows select their own reclamation TLS backend.
+SSE2 lookup is selected at compile time; targets without it use scalar lookup.
+Run `sh scripts/check-no-std.sh -p congee-wt --lib --no-default-features` to
+check with Rust std removed from the target sysroot. `NO_STD_TARGET` selects
+another installed OS target.
+
 ### Why Congee?
 - Fast performance, faster than most hash tables.
 - Concurrent, super scalable, it reaches 150Mop/s on 32 cores.
