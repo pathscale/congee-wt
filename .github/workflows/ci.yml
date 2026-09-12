@@ -6,6 +6,7 @@ on:
       - master
   pull_request:
     branches: [ master ]
+  workflow_dispatch:
 
 jobs:
   check:
@@ -145,7 +146,7 @@ jobs:
         cargo fuzz run ${{ matrix.target }} --release --debug-assertions -s none -- -max_total_time=3600 -fork=$cores
  
   publish:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/master'
     needs: [check, fmt, no_std, test_sans, shuttle]
     runs-on: ubicloud-standard-2
     timeout-minutes: 30
@@ -156,10 +157,21 @@ jobs:
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |
-          if [ -z "$CARGO_REGISTRY_TOKEN" ]; then echo "CARGO_REGISTRY_TOKEN not set; skipping publish"; exit 0; fi
-          v=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
-          if curl -fsSL "https://index.crates.io/co/ng/congee-wt" | sed -n 's/.*"vers":"\([^"]*\)".*/\1/p' | grep -qx "$v"; then
-            echo "congee-wt $v is already on crates.io; nothing to publish"
+          set -eu
+          if [ -z "$CARGO_REGISTRY_TOKEN" ]; then
+            echo "CARGO_REGISTRY_TOKEN is not set on this repository" >&2
+            exit 1
+          fi
+
+          version=$(cargo read-manifest | jq -er '.version')
+          case $version in
+            [0-9]*.[0-9]*) ;;
+            *) echo "could not read the congee-wt version from cargo (got '$version')" >&2; exit 1 ;;
+          esac
+
+          if cargo info --registry crates-io "congee-wt@$version" >/dev/null 2>&1; then
+            echo "congee-wt $version is already published; nothing to do"
             exit 0
           fi
+
           cargo publish -p congee-wt
