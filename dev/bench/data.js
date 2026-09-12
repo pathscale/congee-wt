@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1788780754341,
+  "lastUpdate": 1789182605367,
   "repoUrl": "https://github.com/pathscale/congee-wt",
   "entries": {
     "Congee basic op performance": [
@@ -7830,6 +7830,44 @@ window.BENCHMARK_DATA = {
           {
             "name": "ReadOnly",
             "value": 10101803,
+            "unit": "QPS"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "no-reply@pathscale.com",
+            "name": "meh"
+          },
+          "committer": {
+            "email": "cbergstrom@pathscale.com",
+            "name": "pathscale",
+            "username": "pathscale"
+          },
+          "distinct": true,
+          "id": "468d9e0947144c49a211a094af3077aa594f826c",
+          "message": "Build x86 lookup and OS reclamation without std",
+          "timestamp": "2026-09-12T10:07:10+07:00",
+          "tree_id": "5050c5292e0a6f45ae61b4600126447b84bd957d",
+          "url": "https://github.com/pathscale/congee-wt/commit/468d9e0947144c49a211a094af3077aa594f826c"
+        },
+        "date": 1789182604073,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "UpdateOnly",
+            "value": 14007219,
+            "unit": "QPS"
+          },
+          {
+            "name": "ReadOnly",
+            "value": 10944514,
+            "unit": "QPS"
+          },
+          {
+            "name": "ScanOnly",
+            "value": 3031648,
             "unit": "QPS"
           }
         ]
