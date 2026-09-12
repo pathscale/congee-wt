@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1789182605367,
+  "lastUpdate": 1789183598368,
   "repoUrl": "https://github.com/pathscale/congee-wt",
   "entries": {
     "Congee basic op performance": [
@@ -7868,6 +7868,44 @@ window.BENCHMARK_DATA = {
           {
             "name": "ScanOnly",
             "value": 3031648,
+            "unit": "QPS"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "no-reply@pathscale.com",
+            "name": "meh"
+          },
+          "committer": {
+            "email": "cbergstrom@pathscale.com",
+            "name": "pathscale",
+            "username": "pathscale"
+          },
+          "distinct": true,
+          "id": "21897c15f643dd33788904f15b8300ffe5c9503c",
+          "message": "Let Cargo drive crate publication",
+          "timestamp": "2026-09-12T10:24:09+07:00",
+          "tree_id": "5377a5730bb06c59680c305405d067e014a39f36",
+          "url": "https://github.com/pathscale/congee-wt/commit/21897c15f643dd33788904f15b8300ffe5c9503c"
+        },
+        "date": 1789183597107,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "ScanOnly",
+            "value": 3939045,
+            "unit": "QPS"
+          },
+          {
+            "name": "UpdateOnly",
+            "value": 19089745,
+            "unit": "QPS"
+          },
+          {
+            "name": "ReadOnly",
+            "value": 11049586,
             "unit": "QPS"
           }
         ]
