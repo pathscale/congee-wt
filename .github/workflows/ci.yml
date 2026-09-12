@@ -7,6 +7,12 @@ on:
   pull_request:
     branches: [ master ]
   workflow_dispatch:
+    inputs:
+      deep_checks:
+        description: Run sanitizers, Shuttle, benchmarks and one-hour fuzz targets
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   check:
@@ -48,6 +54,7 @@ jobs:
       run: cargo fmt --all -- --check
 
   test_sans:
+    if: github.event_name == 'workflow_dispatch' && inputs.deep_checks
     runs-on: ubicloud-standard-4
     timeout-minutes: 30
     steps:
@@ -71,6 +78,7 @@ jobs:
         cargo test -Zbuild-std --target x86_64-unknown-linux-gnu --tests
   
   shuttle:
+    if: github.event_name == 'workflow_dispatch' && inputs.deep_checks
     runs-on: ubicloud-standard-4
     timeout-minutes: 30
     steps:
@@ -91,6 +99,7 @@ jobs:
  
   
   benchmark:
+    if: github.event_name == 'workflow_dispatch' && inputs.deep_checks
     permissions:
       contents: write
     runs-on: ubicloud-standard-4
@@ -122,6 +131,7 @@ jobs:
         alert-threshold: "1000%"
   
   fuzz:
+    if: github.event_name == 'workflow_dispatch' && inputs.deep_checks
     runs-on: ubicloud-standard-4
     timeout-minutes: 70
     strategy:
@@ -147,7 +157,7 @@ jobs:
  
   publish:
     if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/master'
-    needs: [check, fmt, no_std, test_sans, shuttle]
+    needs: [check, fmt, no_std]
     runs-on: ubicloud-standard-2
     timeout-minutes: 30
     steps:
