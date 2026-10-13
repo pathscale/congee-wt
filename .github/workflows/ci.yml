@@ -20,6 +20,8 @@ jobs:
     timeout-minutes: 30
     steps:
     - uses: actions/checkout@v4
+      with:
+        persist-credentials: false
     - name: Setup toolchain
       uses: dtolnay/rust-toolchain@v1
       with:
@@ -33,6 +35,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-gnu
@@ -45,6 +49,8 @@ jobs:
     timeout-minutes: 30
     steps:
     - uses: actions/checkout@v4
+      with:
+        persist-credentials: false
     - name: Setup toolchain
       uses: dtolnay/rust-toolchain@v1
       with:
@@ -59,6 +65,8 @@ jobs:
     timeout-minutes: 30
     steps:
     - uses: actions/checkout@v4
+      with:
+        persist-credentials: false
     - name: Setup toolchain
       uses: dtolnay/rust-toolchain@v1
       with:
@@ -83,6 +91,8 @@ jobs:
     timeout-minutes: 30
     steps:
     - uses: actions/checkout@v4
+      with:
+        persist-credentials: false
     - name: Setup toolchain
       uses: dtolnay/rust-toolchain@v1
       with:
@@ -106,6 +116,8 @@ jobs:
     timeout-minutes: 30
     steps:
     - uses: actions/checkout@v4
+      with:
+        persist-credentials: false
     - name: Setup toolchain
       uses: dtolnay/rust-toolchain@v1
       with:
@@ -140,6 +152,8 @@ jobs:
         target: [btree_check, compact_set_check]
     steps:
     - uses: actions/checkout@v4
+      with:
+        persist-credentials: false
     - name: Setup toolchain
       uses: dtolnay/rust-toolchain@v1
       with:
@@ -162,6 +176,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
       - name: Publish when master carries a new version
         env:
