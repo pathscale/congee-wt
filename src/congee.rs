@@ -341,8 +341,8 @@ where
             // The pointer was previously inserted with expose_provenance
             let owned = unsafe { arc_from_usize::<V>(v) };
             let owned_clone = owned.clone();
-            let rt = f(owned_clone);
             _ = Arc::into_raw(owned);
+            let rt = f(owned_clone);
             match rt {
                 Some(new) => Some(candidate.stage(new)),
                 None => {
