@@ -32,8 +32,8 @@
 //!
 //! #### N48 Internal Nodes
 //! ```text
-//! [Header][Prefix][Key Array: 32 bytes (256 bits bitmap)][Precomputed offsets: 4 bytes][Child Offsets: children_len * 4 bytes]
-//! Key Array: direct lookup where key_array[byte_value] gives 1-based index into child offsets
+//! [Header][Prefix][Precomputed popcounts: 4 bytes][Bitmap: 32 bytes][Child Offsets: children_len * 4 bytes]
+//! The bitmap maps byte values to presence; rank within the bitmap selects the child offset.
 //! ```
 //!
 //! #### N256 Internal Nodes
@@ -491,16 +491,6 @@ where
         &self.data[prefix_start..prefix_start + prefix_len]
     }
 
-    #[inline]
-    fn linear_search_node16(
-        &self,
-        children_start: usize,
-        children_len: usize,
-        target_key: u8,
-    ) -> Option<usize> {
-        (0..children_len).find(|&i| self.data[children_start + i] == target_key)
-    }
-
     #[cfg(target_arch = "x86_64")]
     #[inline]
     #[allow(unused)]
@@ -578,257 +568,130 @@ where
     /// ```
     #[inline(always)]
     pub fn contains(&self, input_key: &K) -> bool {
+        self.contains_checked(input_key).unwrap_or(false)
+    }
+
+    fn contains_checked(&self, input_key: &K) -> Option<bool> {
         let key_usize: usize = (*input_key).into();
-        let key: [u8; 8] = key_usize.to_be_bytes();
-        let mut current_node_offset = 0; // Start at root node (offset 0)
-        let mut key_pos = 0;
-
-        loop {
-            if current_node_offset >= self.data.len() {
-                return false;
+        let key = key_usize.to_be_bytes();
+        let read_u32 = |at: usize| -> Option<u32> {
+            let bytes = self.data.get(at..at.checked_add(4)?)?;
+            Some(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+        };
+        let mut offset = 0usize;
+        let mut level = 0usize;
+        for _ in 0..8 {
+            let header = self.data.get(offset..offset.checked_add(2)?)?;
+            if header[0] & 0xc0 != 0 {
+                return None;
             }
-
-            let header =
-                unsafe { *(self.data.as_ptr().add(current_node_offset) as *const NodeHeader) };
-            let node_type = header.node_type();
-            let prefix_len = header.prefix_len() as usize;
-            let children_len = header.children_len();
-
-            if prefix_len > 0 {
-                let prefix_start = current_node_offset + 2;
-                if key_pos + prefix_len > key.len() {
-                    return false;
-                }
-                let key_slice = &key[key_pos..key_pos + prefix_len];
-                let prefix_slice = &self.data[prefix_start..prefix_start + prefix_len];
-                if !key_slice.eq(prefix_slice) {
-                    return false;
-                }
-                key_pos += prefix_len;
+            let kind = header[0] & 7;
+            let prefix_len = usize::from((header[0] >> 3) & 7);
+            let count = usize::from(header[1]) + 1;
+            let prefix = offset.checked_add(2)?;
+            let children = prefix.checked_add(prefix_len)?;
+            let next_level = level.checked_add(prefix_len)?;
+            if self.data.get(prefix..children)? != key.get(level..next_level)? {
+                return Some(false);
             }
+            level = next_level;
+            let byte = *key.get(level)?;
+            let leaf = kind >= 4;
 
-            let next_key_byte = key[key_pos];
-
-            let children_start = current_node_offset + 2 + prefix_len;
-            let mut found_child = None;
-
-            match node_type {
-                NodeType::N4_INTERNAL | NodeType::N4_LEAF => {
-                    #[cfg(feature = "access-stats")]
-                    if let Ok(mut stats) = self.access_stats.lock() {
+            #[cfg(feature = "access-stats")]
+            if let Ok(mut stats) = self.access_stats.lock() {
+                match kind {
+                    0 => {
                         stats.n4_accesses += 1;
-                        match node_type {
-                            NodeType::N4_INTERNAL => stats.n4_internal_accesses += 1,
-                            NodeType::N4_LEAF => stats.n4_leaf_accesses += 1,
-                            _ => {}
-                        }
+                        stats.n4_internal_accesses += 1;
                     }
-
-                    // Linear search for Node4
-                    for i in 0..children_len {
-                        let child_key = self.data[children_start + i];
-                        if child_key == next_key_byte {
-                            found_child = Some(i);
-                            break;
-                        }
-                    }
-                }
-                NodeType::N16_INTERNAL | NodeType::N16_LEAF => {
-                    #[cfg(feature = "access-stats")]
-                    if let Ok(mut stats) = self.access_stats.lock() {
+                    1 => {
                         stats.n16_accesses += 1;
-                        match node_type {
-                            NodeType::N16_INTERNAL => stats.n16_internal_accesses += 1,
-                            NodeType::N16_LEAF => stats.n16_leaf_accesses += 1,
-                            _ => {}
-                        }
+                        stats.n16_internal_accesses += 1;
                     }
-                    found_child =
-                        self.linear_search_node16(children_start, children_len, next_key_byte);
-                }
-                NodeType::N48_INTERNAL => {
-                    #[cfg(feature = "access-stats")]
-                    if let Ok(mut stats) = self.access_stats.lock() {
+                    2 => {
                         stats.n48_accesses += 1;
                         stats.n48_internal_accesses += 1;
                     }
-
-                    // bitmap lookup using precomputed popcount values
-                    use crate::utils::{count_ones_up_to_precomputed, is_bit_set};
-
-                    // Layout: [precomputed popcounts (4 bytes)][bitmap (32 bytes)][child offsets]
-                    let precomputed_start = children_start;
-                    let bitmap_start = children_start + 4;
-
-                    // Read precomputed popcount values (handle potential misalignment)
-                    let precomputed = [
-                        self.data[precomputed_start],
-                        self.data[precomputed_start + 1],
-                        self.data[precomputed_start + 2],
-                        self.data[precomputed_start + 3],
-                    ];
-
-                    // Read bitmap
-                    let bitmap = unsafe {
-                        core::slice::from_raw_parts(self.data.as_ptr().add(bitmap_start), 32)
-                    };
-                    let bitmap_array = unsafe { *(bitmap.as_ptr() as *const [u8; 32]) };
-
-                    if is_bit_set(&bitmap_array, next_key_byte) {
-                        // Calculate the index using precomputed values for O(1) lookup
-                        let child_array_index = count_ones_up_to_precomputed(
-                            &precomputed,
-                            &bitmap_array,
-                            next_key_byte,
-                        );
-                        found_child = Some(child_array_index + 1); // Convert to 1-based index
-                    }
-                }
-                NodeType::N48_LEAF => {
-                    #[cfg(feature = "access-stats")]
-                    if let Ok(mut stats) = self.access_stats.lock() {
-                        stats.n48_accesses += 1;
-                        stats.n48_leaf_accesses += 1;
-                    }
-
-                    // O(1) bitmap lookup: check if bit is set for this key
-                    let byte_idx = next_key_byte as usize / 8;
-                    let bit_idx = next_key_byte as usize % 8;
-                    let bitmap_byte = self.data[children_start + byte_idx];
-                    if (bitmap_byte & (1u8 << bit_idx)) != 0 {
-                        // For leaf nodes, we found the value
-                        return key_pos + 1 == key.len();
-                    }
-                }
-                NodeType::N256_INTERNAL => {
-                    // Track access
-                    #[cfg(feature = "access-stats")]
-                    if let Ok(mut stats) = self.access_stats.lock() {
+                    3 => {
                         stats.n256_accesses += 1;
                         stats.n256_internal_accesses += 1;
                     }
-
-                    // Read difference for this key
-                    let diff_offset = children_start + 8 + next_key_byte as usize * 2;
-                    let difference = i16::from_le_bytes(
-                        self.data[diff_offset..diff_offset + 2].try_into().unwrap(),
-                    );
-
-                    if difference != i16::MIN {
-                        found_child = Some(next_key_byte as usize); // Use key as dummy index
+                    4 => {
+                        stats.n4_accesses += 1;
+                        stats.n4_leaf_accesses += 1;
                     }
-                }
-                NodeType::N256_LEAF => {
-                    #[cfg(feature = "access-stats")]
-                    if let Ok(mut stats) = self.access_stats.lock() {
+                    5 => {
+                        stats.n16_accesses += 1;
+                        stats.n16_leaf_accesses += 1;
+                    }
+                    6 => {
+                        stats.n48_accesses += 1;
+                        stats.n48_leaf_accesses += 1;
+                    }
+                    7 => {
                         stats.n256_accesses += 1;
                         stats.n256_leaf_accesses += 1;
                     }
-
-                    // check if bit is set for this key
-                    let byte_idx = next_key_byte as usize / 8;
-                    let bit_idx = next_key_byte as usize % 8;
-                    let bitmap_byte = self.data[children_start + byte_idx];
-                    if (bitmap_byte & (1u8 << bit_idx)) != 0 {
-                        // For leaf nodes, we found the value
-                        return key_pos + 1 == key.len();
-                    }
-                }
-                _ => {
-                    panic!("Unknown node type: {node_type}");
+                    _ => unreachable!(),
                 }
             }
 
-            match found_child {
-                Some(child_idx) => {
-                    match node_type {
-                        NodeType::N4_LEAF
-                        | NodeType::N16_LEAF
-                        | NodeType::N48_LEAF
-                        | NodeType::N256_LEAF => {
-                            // At leaf node, check if we've consumed entire key
-                            return key_pos + 1 == key.len();
-                        }
-                        NodeType::N48_INTERNAL => {
-                            // For N48_INTERNAL, child_idx is 1-based index into child_offsets array
-                            let child_offsets_start = children_start + 36; // After precomputed (4) + bitmap (32)
-                            let child_offset_location = child_offsets_start + (child_idx - 1) * 4; // Convert to 0-based
-                            let next_node_offset = u32::from_le_bytes(
-                                self.data[child_offset_location..child_offset_location + 4]
-                                    .try_into()
-                                    .unwrap(),
-                            ) as usize;
-
-                            if next_node_offset == 0 {
-                                // Found stored value at this position
-                                return key_pos + 1 == key.len();
-                            } else {
-                                current_node_offset = next_node_offset;
-                                key_pos += 1;
-                            }
-                        }
-                        NodeType::N256_INTERNAL => {
-                            // For N256_INTERNAL, calculate the offset using the slope and intercept
-                            let slope = u32::from_le_bytes(
-                                self.data[children_start..children_start + 4]
-                                    .try_into()
-                                    .unwrap(),
-                            );
-                            let intercept = u32::from_le_bytes(
-                                self.data[children_start + 4..children_start + 8]
-                                    .try_into()
-                                    .unwrap(),
-                            );
-
-                            // Read difference for this key
-                            let diff_offset = children_start + 8 + next_key_byte as usize * 2;
-                            let difference = i16::from_le_bytes(
-                                self.data[diff_offset..diff_offset + 2].try_into().unwrap(),
-                            ) as i32;
-
-                            if difference > i16::MAX as i32 || difference < i16::MIN as i32 {
-                                panic!("Difference is greater than i16::MAX. Should not happen.");
-                            }
-                            if difference == i16::MIN as i32 {
-                                // No child at this key
-                                return false;
-                            }
-
-                            // Reconstruct the actual offset using direct indexing
-                            let predicted_offset = slope * next_key_byte as u32 + intercept;
-                            let next_node_offset = (predicted_offset as i32 + difference) as usize;
-
-                            if next_node_offset == 0 {
-                                // Found stored value at this position
-                                return key_pos + 1 == key.len();
-                            } else {
-                                current_node_offset = next_node_offset;
-                                key_pos += 1;
-                            }
-                        }
-                        _ => {
-                            // N4/N16 internal nodes: [keys][offsets] layout
-                            let offset_start = children_start + children_len;
-                            let offset_index = offset_start + child_idx * 4;
-                            let next_node_offset = u32::from_le_bytes(
-                                self.data[offset_index..offset_index + 4]
-                                    .try_into()
-                                    .unwrap(),
-                            ) as usize;
-
-                            if next_node_offset == 0 {
-                                // Found stored value at this position
-                                return key_pos + 1 == key.len();
-                            } else {
-                                current_node_offset = next_node_offset;
-                                key_pos += 1;
-                            }
-                        }
-                    }
+            let next = match kind {
+                0 | 1 | 4 | 5 => {
+                    let capacity = if kind == 0 || kind == 4 { 4 } else { 16 };
+                    if count > capacity { return None; }
+                    let keys_end = children.checked_add(count)?;
+                    let keys = self.data.get(children..keys_end)?;
+                    let Some(index) = keys.iter().position(|value| *value == byte) else {
+                        return Some(false);
+                    };
+                    if leaf { return Some(level + 1 == key.len()); }
+                    read_u32(keys_end.checked_add(index.checked_mul(4)?)?)? as usize
                 }
-                None => return false,
+                2 | 6 | 7 => {
+                    if (kind == 2 || kind == 6) && count > 48 {
+                        return None;
+                    }
+                    let bitmap_at = children.checked_add(if kind == 2 { 4 } else { 0 })?;
+                    let bitmap = self.data.get(bitmap_at..bitmap_at.checked_add(32)?)?;
+                    let slot = usize::from(byte) / 8;
+                    let bit = byte % 8;
+                    if bitmap[slot] & (1u8 << bit) == 0 {
+                        return Some(false);
+                    }
+                    if leaf {
+                        return Some(level + 1 == key.len());
+                    }
+                    let rank: usize = bitmap[..slot]
+                        .iter()
+                        .map(|v| v.count_ones() as usize)
+                        .sum::<usize>()
+                        + (bitmap[slot] & ((1u8 << bit) - 1)).count_ones() as usize;
+                    if rank >= count { return None; }
+                    let offsets = children.checked_add(36)?;
+                    read_u32(offsets.checked_add(rank.checked_mul(4)?)?)? as usize
+                }
+                3 => {
+                    let diff_at = children.checked_add(8)?.checked_add(usize::from(byte) * 2)?;
+                    let bytes = self.data.get(diff_at..diff_at.checked_add(2)?)?;
+                    let difference = i16::from_le_bytes([bytes[0], bytes[1]]);
+                    if difference == i16::MIN { return Some(false); }
+                    let slope = read_u32(children)?;
+                    let intercept = read_u32(children.checked_add(4)?)?;
+                    let predicted = slope.checked_mul(u32::from(byte))?.checked_add(intercept)?;
+                    usize::try_from(i64::from(predicted) + i64::from(difference)).ok()?
+                }
+                _ => return None,
+            };
+            if next == 0 {
+                return Some(level + 1 == key.len());
             }
+            if next <= offset || next >= self.data.len() { return None; }
+            offset = next;
+            level += 1;
         }
+        Some(false)
     }
 
     /// Print the compact set in a human readable format
