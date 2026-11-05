@@ -184,9 +184,13 @@ impl<const K_LEN: usize, A: Allocator + Clone + Send> CongeeInner<K_LEN, A> {
                 };
                 level = next_level;
 
-                let child_node = node
-                    .as_ref()
-                    .get_child(unsafe { *key.get_unchecked(level) });
+                let Some(&key_byte) = key.get(level) else {
+                    if node.check_version().is_err() {
+                        continue 'outer;
+                    }
+                    return None;
+                };
+                let child_node = node.as_ref().get_child(key_byte);
                 let child_node = match child_node {
                     Some(child_node) => child_node,
                     None => {
