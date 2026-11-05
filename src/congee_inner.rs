@@ -525,15 +525,13 @@ impl<const K_LEN: usize, A: Allocator + Clone + Send> CongeeInner<K_LEN, A> {
         guard: &Guard,
     ) -> usize {
         self.assert_guard(guard);
-        let root = self.load_root();
-        let mut range_scan = RangeScan::new(start, end, result, root);
-
-        if !range_scan.is_valid_key_pair() {
+        if start >= end {
             return 0;
         }
 
         let backoff = Backoff::new();
         loop {
+            let mut range_scan = RangeScan::new(start, end, &mut *result, self.load_root());
             let scanned = range_scan.scan();
             match scanned {
                 Ok(n) => {
