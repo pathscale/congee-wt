@@ -66,7 +66,7 @@ where
     /// drop(set);
     /// assert_eq!(deleted_key.load(std::sync::atomic::Ordering::Relaxed), 1);
     /// ```
-    pub fn new_with_drainer(allocator: A, drainer: impl Fn(K) + 'static) -> Self {
+    pub fn new_with_drainer(allocator: A, drainer: impl Fn(K) + Send + Sync + 'static) -> Self {
         let drainer =
             Arc::new(move |k: [u8; 8], _v: usize| drainer(K::from(usize::from_be_bytes(k))));
         CongeeSet {

@@ -24,14 +24,14 @@ pub(crate) struct CongeeInner<
     A: Allocator + Clone + Send + 'static = DefaultAllocator, // Allocator must be clone because it is used in the epoch guard.
 > {
     pub(crate) root: AtomicPtr<BaseNode>,
-    drain_callback: Arc<dyn Fn([u8; K_LEN], usize)>,
+    drain_callback: Arc<dyn Fn([u8; K_LEN], usize) + Send + Sync>,
     allocator: A,
     reclaimer: Reclaimer,
     _pt_key: PhantomData<[u8; K_LEN]>,
 }
 
 unsafe impl<const K_LEN: usize, A: Allocator + Clone + Send> Send for CongeeInner<K_LEN, A> {}
-unsafe impl<const K_LEN: usize, A: Allocator + Clone + Send> Sync for CongeeInner<K_LEN, A> {}
+unsafe impl<const K_LEN: usize, A: Allocator + Clone + Send + Sync> Sync for CongeeInner<K_LEN, A> {}
 
 impl<const K_LEN: usize> Default for CongeeInner<K_LEN> {
     fn default() -> Self {
@@ -47,7 +47,7 @@ pub(crate) trait CongeeVisitor<const K_LEN: usize> {
 
 struct DropVisitor<const K_LEN: usize, A: Allocator + Clone + Send> {
     allocator: A,
-    drain_callback: Arc<dyn Fn([u8; K_LEN], usize)>,
+    drain_callback: Arc<dyn Fn([u8; K_LEN], usize) + Send + Sync>,
 }
 
 impl<const K_LEN: usize, A: Allocator + Clone + Send> CongeeVisitor<K_LEN>
@@ -101,7 +101,7 @@ impl<const K_LEN: usize, A: Allocator + Clone + Send> Drop for CongeeInner<K_LEN
 }
 
 impl<const K_LEN: usize, A: Allocator + Clone + Send> CongeeInner<K_LEN, A> {
-    pub fn new(allocator: A, drain_callback: Arc<dyn Fn([u8; K_LEN], usize)>) -> Self {
+    pub fn new(allocator: A, drain_callback: Arc<dyn Fn([u8; K_LEN], usize) + Send + Sync>) -> Self {
         let root = BaseNode::make_node::<Node4, A>(&[], &allocator)
             .expect("Can't allocate memory for root node!");
         CongeeInner {
@@ -123,7 +123,7 @@ impl<const K_LEN: usize, A: Allocator + Clone + Send> CongeeInner<K_LEN, A> {
     pub(crate) fn from_root(
         root: NonNull<BaseNode>,
         allocator: A,
-        drain_callback: Arc<dyn Fn([u8; K_LEN], usize)>,
+        drain_callback: Arc<dyn Fn([u8; K_LEN], usize) + Send + Sync>,
     ) -> Self {
         Self {
             root: AtomicPtr::new(root.as_ptr()),
