@@ -270,7 +270,7 @@ fn validate_node<V>(node: &Node<V>, path_bytes: usize) -> Result<(), Error> {
             found: usize::MAX,
             expected: 8,
         })?;
-    if path_bytes > 8 {
+    if path_bytes >= 8 || (path_bytes != 0 && node.branches.is_empty()) {
         return Err(Error::InvalidKeyLength {
             found: path_bytes,
             expected: 8,
