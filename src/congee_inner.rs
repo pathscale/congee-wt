@@ -665,6 +665,16 @@ impl<const K_LEN: usize, A: Allocator + Clone + Send> CongeeInner<K_LEN, A> {
     }
 
     pub(crate) fn to_compact_set(&self) -> Vec<u8> {
+        let backoff = Backoff::new();
+        loop {
+            match self.try_to_compact_set() {
+                Ok(bytes) => return bytes,
+                Err(_) => backoff.spin(),
+            }
+        }
+    }
+
+    fn try_to_compact_set(&self) -> Result<Vec<u8>, ArtError> {
         use crate::congee_compact_set::NodeType as CompactNodeType;
         use alloc::collections::VecDeque;
 
@@ -674,11 +684,12 @@ impl<const K_LEN: usize, A: Allocator + Clone + Send> CongeeInner<K_LEN, A> {
         let mut queue = VecDeque::new();
 
         let root = self.load_root();
-        let node = BaseNode::read_lock(root).unwrap();
+        let node = BaseNode::read_lock(root)?;
 
         // Empty tree
         if node.as_ref().meta.count() == 0 {
-            return buf;
+            node.check_version()?;
+            return Ok(buf);
         }
 
         // drop(node);
@@ -686,10 +697,11 @@ impl<const K_LEN: usize, A: Allocator + Clone + Send> CongeeInner<K_LEN, A> {
 
         // First pass: collect all nodes and assign indices
         let mut nodes_data = Vec::new();
+        let mut versions = Vec::new();
         let mut node_counter = 0u32;
 
         while let Some(node_ptr) = queue.pop_front() {
-            let node = BaseNode::read_lock(node_ptr).unwrap();
+            let node = BaseNode::read_lock(node_ptr)?;
             let node_prefix = node.as_ref().prefix().to_vec();
 
             // Collect children data first to identify node type and count
@@ -711,6 +723,10 @@ impl<const K_LEN: usize, A: Allocator + Clone + Send> CongeeInner<K_LEN, A> {
                 });
             }
 
+            node.check_version()?;
+            if children.is_empty() {
+                return Err(ArtError::VersionNotMatch);
+            }
             // Determine node type based on base node type and whether it's a leaf
             let node_type = match (node.as_ref().get_type(), is_leaf) {
                 (NodeType::N4, false) => CompactNodeType::N4_INTERNAL,
@@ -724,8 +740,12 @@ impl<const K_LEN: usize, A: Allocator + Clone + Send> CongeeInner<K_LEN, A> {
             };
 
             nodes_data.push((node_type, node_prefix, children, is_leaf));
+            versions.push(node);
         }
 
+        for version in &versions {
+            version.check_version()?;
+        }
         // Calculate all node offsets first
         let mut node_offsets = Vec::new();
         let mut current_offset = 0usize;
@@ -891,6 +911,6 @@ impl<const K_LEN: usize, A: Allocator + Clone + Send> CongeeInner<K_LEN, A> {
             }
         }
 
-        buf
+        Ok(buf)
     }
 }
