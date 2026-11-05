@@ -123,7 +123,7 @@ where
     /// assert_eq!(deleted_key.load(std::sync::atomic::Ordering::Relaxed), 1);
     /// assert_eq!(deleted_value.load(std::sync::atomic::Ordering::Relaxed), 42);
     /// ```
-    pub fn new_with_drainer(allocator: A, drainer: impl Fn(K, V) + 'static) -> Self {
+    pub fn new_with_drainer(allocator: A, drainer: impl Fn(K, V) + Send + Sync + 'static) -> Self {
         let drainer = Arc::new(move |k: [u8; 8], v: usize| {
             drainer(K::from(usize::from_be_bytes(k)), V::from(v))
         });

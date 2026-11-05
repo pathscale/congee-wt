@@ -228,10 +228,10 @@ where
         topology: Topology<T>,
         allocator: A,
         mut decode: impl FnMut(T) -> V,
-        drainer: impl Fn(K, V) + 'static,
+        drainer: impl Fn(K, V) + Send + Sync + 'static,
     ) -> Result<Self, Error> {
         topology.validate()?;
-        let drain_callback: Arc<dyn Fn([u8; 8], usize)> = Arc::new(move |key, value| {
+        let drain_callback: Arc<dyn Fn([u8; 8], usize) + Send + Sync> = Arc::new(move |key, value| {
             drainer(K::from(usize::from_be_bytes(key)), V::from(value));
         });
 
@@ -406,7 +406,7 @@ fn export_node<T>(
 struct BuiltNode<'a, A: Allocator> {
     pointer: Option<NonNull<BaseNode>>,
     allocator: &'a A,
-    drain: &'a Arc<dyn Fn([u8; 8], usize)>,
+    drain: &'a Arc<dyn Fn([u8; 8], usize) + Send + Sync>,
 }
 
 impl<A: Allocator> BuiltNode<'_, A> {
@@ -433,7 +433,7 @@ impl<A: Allocator> Drop for BuiltNode<'_, A> {
 fn import_node<'a, T, A: Allocator>(
     mut node: Node<T>,
     allocator: &'a A,
-    drain: &'a Arc<dyn Fn([u8; 8], usize)>,
+    drain: &'a Arc<dyn Fn([u8; 8], usize) + Send + Sync>,
     decode: &mut impl FnMut(T) -> usize,
 ) -> Result<BuiltNode<'a, A>, Error> {
     let pointer = BaseNode::make_topology_node(node.kind.into_raw(), &node.prefix, allocator)
