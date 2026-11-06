@@ -103,6 +103,10 @@ impl Debug for NodePtr {
 }
 
 impl NodePtr {
+    pub(crate) fn try_from_payload(val: usize) -> Option<Self> {
+        (val & HIGH_BIT_MASK == 0).then_some(Self { val })
+    }
+
     pub(crate) fn from_payload(val: usize) -> Self {
         // Invariant: the high bit tags sub-node pointers, so payloads must be
         // < 2^63. A payload with the high bit set would silently be treated as
