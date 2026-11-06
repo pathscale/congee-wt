@@ -474,21 +474,39 @@ where
         }
     }
 
-    #[inline]
-    fn get_node_header(&self, offset: usize) -> &NodeHeader {
-        if offset + 2 > self.data.len() {
-            panic!("Node offset {offset} out of bounds");
+    // Inspection APIs consume untrusted serialized bytes. Keep their traversal bounded
+    // by validating the complete node layout before exposing any of its slices.
+    fn checked_node_at(&self, offset: usize) -> Option<(NodeHeader, &[u8], usize)> {
+        let header_bytes = self.data.get(offset..offset.checked_add(2)?)?;
+        let header = NodeHeader {
+            type_and_prefix: header_bytes[0],
+            children_len: header_bytes[1],
+        };
+        if header.type_and_prefix & 0b1100_0000 != 0 {
+            return None;
         }
-
-        unsafe { &*(self.data.as_ptr().add(offset) as *const NodeHeader) }
-    }
-
-    #[inline]
-    fn get_node_prefix(&self, offset: usize) -> &[u8] {
-        let header = *self.get_node_header(offset);
-        let prefix_start = offset + 2;
-        let prefix_len = header.prefix_len() as usize;
-        &self.data[prefix_start..prefix_start + prefix_len]
+        let prefix_start = offset.checked_add(2)?;
+        let prefix_end = prefix_start.checked_add(header.prefix_len() as usize)?;
+        let prefix = self.data.get(prefix_start..prefix_end)?;
+        let count = header.children_len();
+        let kind = header.node_type();
+        if matches!(kind, NodeType::N4_INTERNAL | NodeType::N4_LEAF) && count > 4
+            || matches!(kind, NodeType::N16_INTERNAL | NodeType::N16_LEAF) && count > 16
+            || matches!(kind, NodeType::N48_INTERNAL | NodeType::N48_LEAF) && count > 48
+        {
+            return None;
+        }
+        let child_size = match header.node_type() {
+            NodeType::N4_INTERNAL | NodeType::N16_INTERNAL => count.checked_mul(5)?,
+            NodeType::N48_INTERNAL => 36usize.checked_add(count.checked_mul(4)?)?,
+            NodeType::N256_INTERNAL => 520,
+            NodeType::N4_LEAF | NodeType::N16_LEAF => count,
+            NodeType::N48_LEAF | NodeType::N256_LEAF => 32,
+            _ => return None,
+        };
+        let end = prefix_end.checked_add(child_size)?;
+        self.data.get(offset..end)?;
+        Some((header, prefix, end))
     }
 
     #[cfg(target_arch = "x86_64")]
@@ -586,8 +604,8 @@ where
                 return None;
             }
             let kind = header[0] & 7;
-            let prefix_len = usize::from((header[0] >> 3) & 7);
-            let count = usize::from(header[1]) + 1;
+            let prefix_len = <usize as From<u8>>::from((header[0] >> 3) & 7);
+            let count = <usize as From<u8>>::from(header[1]) + 1;
             let prefix = offset.checked_add(2)?;
             let children = prefix.checked_add(prefix_len)?;
             let next_level = level.checked_add(prefix_len)?;
@@ -640,13 +658,17 @@ where
             let next = match kind {
                 0 | 1 | 4 | 5 => {
                     let capacity = if kind == 0 || kind == 4 { 4 } else { 16 };
-                    if count > capacity { return None; }
+                    if count > capacity {
+                        return None;
+                    }
                     let keys_end = children.checked_add(count)?;
                     let keys = self.data.get(children..keys_end)?;
                     let Some(index) = keys.iter().position(|value| *value == byte) else {
                         return Some(false);
                     };
-                    if leaf { return Some(level + 1 == key.len()); }
+                    if leaf {
+                        return Some(level + 1 == key.len());
+                    }
                     read_u32(keys_end.checked_add(index.checked_mul(4)?)?)? as usize
                 }
                 2 | 6 | 7 => {
@@ -655,7 +677,7 @@ where
                     }
                     let bitmap_at = children.checked_add(if kind == 2 { 4 } else { 0 })?;
                     let bitmap = self.data.get(bitmap_at..bitmap_at.checked_add(32)?)?;
-                    let slot = usize::from(byte) / 8;
+                    let slot = <usize as From<u8>>::from(byte) / 8;
                     let bit = byte % 8;
                     if bitmap[slot] & (1u8 << bit) == 0 {
                         return Some(false);
@@ -668,15 +690,21 @@ where
                         .map(|v| v.count_ones() as usize)
                         .sum::<usize>()
                         + (bitmap[slot] & ((1u8 << bit) - 1)).count_ones() as usize;
-                    if rank >= count { return None; }
+                    if rank >= count {
+                        return None;
+                    }
                     let offsets = children.checked_add(36)?;
                     read_u32(offsets.checked_add(rank.checked_mul(4)?)?)? as usize
                 }
                 3 => {
-                    let diff_at = children.checked_add(8)?.checked_add(usize::from(byte) * 2)?;
+                    let diff_at = children
+                        .checked_add(8)?
+                        .checked_add(<usize as From<u8>>::from(byte) * 2)?;
                     let bytes = self.data.get(diff_at..diff_at.checked_add(2)?)?;
                     let difference = i16::from_le_bytes([bytes[0], bytes[1]]);
-                    if difference == i16::MIN { return Some(false); }
+                    if difference == i16::MIN {
+                        return Some(false);
+                    }
                     let slope = read_u32(children)?;
                     let intercept = read_u32(children.checked_add(4)?)?;
                     let predicted = slope.checked_mul(u32::from(byte))?.checked_add(intercept)?;
@@ -687,7 +715,9 @@ where
             if next == 0 {
                 return Some(level + 1 == key.len());
             }
-            if next <= offset || next >= self.data.len() { return None; }
+            if next <= offset || next >= self.data.len() {
+                return None;
+            }
             offset = next;
             level += 1;
         }
@@ -705,13 +735,8 @@ where
         let mut node_index = 0;
         let mut offset = 0;
 
-        while offset + 2 <= self.data.len() {
-            let header = unsafe { *(self.data.as_ptr().add(offset) as *const NodeHeader) };
-            let prefix_len = header.prefix_len() as usize;
+        while let Some((header, prefix, end)) = self.checked_node_at(offset) {
             let children_len = header.children_len();
-
-            let prefix_start = offset + 2;
-            let prefix = &self.data[prefix_start..prefix_start + prefix_len];
 
             println!(
                 "Node[{}] @ offset {}: type={}, prefix={:?}, children={}",
@@ -724,16 +749,7 @@ where
 
             println!("  -> {children_len} children");
 
-            let children_size = match header.node_type() {
-                NodeType::N48_INTERNAL => 36 + children_len * 4,
-                NodeType::N48_LEAF => 32,               // 32-byte bitmap
-                NodeType::N256_INTERNAL => 8 + 256 * 2, // slope + intercept + differences
-                NodeType::N256_LEAF => 32,              // 32-byte bitmap
-                NodeType::N4_LEAF | NodeType::N16_LEAF => children_len,
-                _ => children_len * 5, // N4/N16 internal: key + offset pairs
-            };
-
-            offset += 2 + prefix_len + children_size; // header + prefix + children
+            offset = end;
             node_index += 1;
         }
 
@@ -744,25 +760,9 @@ where
         let mut count = 0;
         let mut offset = 0;
 
-        while offset + 2 <= self.data.len() {
+        while let Some((_, _, end)) = self.checked_node_at(offset) {
             count += 1;
-
-            // Read node header to calculate size
-            let header = unsafe { *(self.data.as_ptr().add(offset) as *const NodeHeader) };
-            let prefix_len = header.prefix_len() as usize;
-            let children_len = header.children_len();
-
-            // Calculate children size based on node type
-            let children_size = match header.node_type() {
-                NodeType::N48_INTERNAL => 36 + children_len * 4,
-                NodeType::N48_LEAF => 32,               // 32-byte bitmap
-                NodeType::N256_INTERNAL => 8 + 256 * 2, // slope + intercept + differences
-                NodeType::N256_LEAF => 32,              // 32-byte bitmap
-                NodeType::N4_LEAF | NodeType::N16_LEAF => children_len,
-                _ => children_len * 5, // key + offset pairs
-            };
-
-            offset += 2 + prefix_len + children_size;
+            offset = end;
         }
 
         count
@@ -817,9 +817,7 @@ where
         };
 
         let mut offset = 0;
-        while offset + 2 <= self.data.len() {
-            let header = *self.get_node_header(offset);
-            let prefix = self.get_node_prefix(offset);
+        while let Some((header, prefix, end)) = self.checked_node_at(offset) {
             let children_len = header.children_len();
 
             stats.header_bytes += 2;
@@ -877,15 +875,7 @@ where
                 stats.kv_pairs += children_len;
             }
 
-            let children_size = match header.node_type() {
-                NodeType::N48_INTERNAL => 36 + children_len * 4,
-                NodeType::N48_LEAF => 32,               // 32-byte bitmap
-                NodeType::N256_INTERNAL => 8 + 256 * 2, // slope + intercept + differences
-                NodeType::N256_LEAF => 32,              // 32-byte bitmap
-                NodeType::N4_LEAF | NodeType::N16_LEAF => children_len,
-                _ => children_len * 5, // key + offset pairs
-            };
-            offset += 2 + prefix.len() + children_size;
+            offset = end;
         }
 
         #[cfg(feature = "access-stats")]
@@ -905,6 +895,40 @@ where
 mod tests {
     use super::*;
     use crate::CongeeSet;
+
+    #[test]
+    fn inspection_stops_at_malformed_node_layouts() {
+        // Prefix claims bytes beyond the input, a truncated N4 leaf, a reserved
+        // header bit, and an over-capacity N4 leaf with a complete payload.
+        // None of the inspection entry points may index past input or count bad layouts.
+        for bytes in [
+            &[0b0000_1000, 0][..],
+            &[4, 3, 1][..],
+            &[0b0100_0000, 0][..],
+            &[4, 4, 0, 1, 2, 3, 4][..],
+        ] {
+            let compact = CongeeCompactSet::<usize>::new(bytes);
+            assert_eq!(compact.node_count(), 0);
+            let stats = compact.stats();
+            assert_eq!(stats.total_nodes, 0);
+            assert_eq!(stats.header_bytes, 0);
+            #[cfg(feature = "std")]
+            compact.debug_print();
+        }
+    }
+
+    #[test]
+    fn inspection_counts_only_complete_nodes_before_bad_tail() {
+        // Complete N4 leaf (one key), then a header whose N16 leaf payload is absent.
+        let compact = CongeeCompactSet::<usize>::new(&[4, 0, 7, 5, 1]);
+        assert_eq!(compact.node_count(), 1);
+        let stats = compact.stats();
+        assert_eq!(stats.total_nodes, 1);
+        assert_eq!(stats.n4_leaf_count, 1);
+        assert_eq!(stats.kv_pairs, 1);
+        #[cfg(feature = "std")]
+        compact.debug_print();
+    }
 
     #[test]
     fn test_sequential_keys() {
