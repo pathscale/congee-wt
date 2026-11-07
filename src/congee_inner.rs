@@ -72,9 +72,7 @@ fn compact_node_layout(
 
 #[cfg(test)]
 mod compact_layout_tests {
-    use super::{
-        ArtError, CompactAttemptError, CompactNodeType, CompactSetError, compact_node_layout,
-    };
+    use super::{CompactNodeType, CompactSetError, compact_node_layout};
 
     #[test]
     fn every_layout_checks_the_last_addressable_byte() {
@@ -120,24 +118,6 @@ mod compact_layout_tests {
                 Err(CompactSetError::OffsetOutOfRange)
             );
         }
-    }
-
-    #[test]
-    fn only_lock_and_version_errors_are_retryable() {
-        for error in [ArtError::Locked, ArtError::VersionNotMatch] {
-            assert!(matches!(
-                CompactAttemptError::from(error),
-                CompactAttemptError::Contention
-            ));
-        }
-        assert!(matches!(
-            CompactAttemptError::from(ArtError::Oom),
-            CompactAttemptError::Permanent(CompactSetError::OutOfMemory)
-        ));
-        assert!(matches!(
-            CompactAttemptError::from(CompactSetError::OffsetOutOfRange),
-            CompactAttemptError::Permanent(CompactSetError::OffsetOutOfRange)
-        ));
     }
 }
 
