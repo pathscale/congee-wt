@@ -77,6 +77,9 @@ where
     /// let tree = CongeeRaw::<usize, usize>::default();
     /// let guard = tree.pin();
     /// ```
+    ///
+    /// Pinning can advance reclamation and run ready deferred callbacks on
+    /// the calling thread. Callback execution time is part of the call's latency.
     #[inline]
     pub fn pin(&self) -> epoch::Guard<'_> {
         self.inner.pin()
@@ -98,6 +101,8 @@ where
     /// Create an empty [Art] tree with a drainer.
     ///
     /// The drainer is called on each of the value when the tree is dropped.
+    /// Captured state must be `Send + Sync`; use synchronization for mutable
+    /// state shared by drainer calls.
     ///
     /// # Examples
     ///
