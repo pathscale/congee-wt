@@ -81,6 +81,15 @@ assert_eq!(scan_result, 1);
 assert_eq!(scan_buffer[0], (0, 42));
 ```
 
+### API compatibility
+
+In version 0.5, drainer callbacks passed to `CongeeRaw::new_with_drainer` and
+topology restoration must be `Send + Sync`. Use synchronized captured state when
+migrating callbacks that previously used thread-local mutable containers.
+
+Pinning may advance reclamation and execute ready deferred callbacks on the
+calling thread; it does not promise a fixed callback or latency budget.
+
 ### Performance
 Benchmarked with the [`conc-map-bench`](https://github.com/xacrimon/conc-map-bench)
 
