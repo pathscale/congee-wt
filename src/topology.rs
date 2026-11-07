@@ -135,6 +135,8 @@ pub enum Error {
     },
     /// Node48's live and free slots do not form an exact partition.
     InvalidFreeList,
+    /// A decoded payload uses the bit reserved for tagging sub-node pointers.
+    InvalidPayloadTag,
     /// A node changed while it was being exported.
     ConcurrentMutation,
     /// The configured Congee allocator could not restore a node.
@@ -162,6 +164,9 @@ impl fmt::Display for Error {
                 write!(formatter, "invalid or duplicate {kind:?} slot {slot}")
             }
             Self::InvalidFreeList => formatter.write_str("invalid Congee N48 free list"),
+            Self::InvalidPayloadTag => {
+                formatter.write_str("Congee topology payload uses the reserved high bit")
+            }
             Self::ConcurrentMutation => {
                 formatter.write_str("Congee changed during topology export")
             }
@@ -224,20 +229,28 @@ where
     }
 
     /// Restore a topology and install the value drainer used when the tree drops.
+    ///
+    /// If restoration fails after decoding values, each previously installed value
+    /// is drained once with its original full key before all partial nodes are freed.
     pub fn from_topology_with_drainer<T>(
         topology: Topology<T>,
         allocator: A,
         mut decode: impl FnMut(T) -> V,
-        drainer: impl Fn(K, V) + 'static,
+        drainer: impl Fn(K, V) + Send + Sync + 'static,
     ) -> Result<Self, Error> {
         topology.validate()?;
-        let drain_callback: Arc<dyn Fn([u8; 8], usize)> = Arc::new(move |key, value| {
-            drainer(K::from(usize::from_be_bytes(key)), V::from(value));
-        });
+        let drain_callback: Arc<dyn Fn([u8; 8], usize) + Send + Sync> =
+            Arc::new(move |key, value| {
+                drainer(K::from(usize::from_be_bytes(key)), V::from(value));
+            });
 
-        let root = import_node(topology.root, &allocator, &drain_callback, &mut |value| {
-            usize::from(decode(value))
-        })?;
+        let root = import_node(
+            topology.root,
+            &allocator,
+            &drain_callback,
+            &mut |value| usize::from(decode(value)),
+            Vec::new(),
+        )?;
         let root = root.into_inner();
 
         Ok(Self {
@@ -270,7 +283,7 @@ fn validate_node<V>(node: &Node<V>, path_bytes: usize) -> Result<(), Error> {
             found: usize::MAX,
             expected: 8,
         })?;
-    if path_bytes > 8 {
+    if path_bytes >= 8 || (path_bytes != 0 && node.branches.is_empty()) {
         return Err(Error::InvalidKeyLength {
             found: path_bytes,
             expected: 8,
@@ -405,8 +418,10 @@ fn export_node<T>(
 
 struct BuiltNode<'a, A: Allocator> {
     pointer: Option<NonNull<BaseNode>>,
+    /// Key bytes before this node's compressed prefix.
+    key: Vec<u8>,
     allocator: &'a A,
-    drain: &'a Arc<dyn Fn([u8; 8], usize)>,
+    drain: &'a Arc<dyn Fn([u8; 8], usize) + Send + Sync>,
 }
 
 impl<A: Allocator> BuiltNode<'_, A> {
@@ -418,14 +433,7 @@ impl<A: Allocator> BuiltNode<'_, A> {
 impl<A: Allocator> Drop for BuiltNode<'_, A> {
     fn drop(&mut self) {
         if let Some(pointer) = self.pointer.take() {
-            unsafe {
-                destroy_tree(
-                    pointer,
-                    &mut Vec::new(),
-                    self.allocator,
-                    self.drain.as_ref(),
-                )
-            };
+            unsafe { destroy_tree(pointer, &mut self.key, self.allocator, self.drain.as_ref()) };
         }
     }
 }
@@ -433,13 +441,15 @@ impl<A: Allocator> Drop for BuiltNode<'_, A> {
 fn import_node<'a, T, A: Allocator>(
     mut node: Node<T>,
     allocator: &'a A,
-    drain: &'a Arc<dyn Fn([u8; 8], usize)>,
+    drain: &'a Arc<dyn Fn([u8; 8], usize) + Send + Sync>,
     decode: &mut impl FnMut(T) -> usize,
+    key: Vec<u8>,
 ) -> Result<BuiltNode<'a, A>, Error> {
     let pointer = BaseNode::make_topology_node(node.kind.into_raw(), &node.prefix, allocator)
         .map_err(|_| Error::OutOfMemory)?;
     let built = BuiltNode {
         pointer: Some(pointer),
+        key,
         allocator,
         drain,
     };
@@ -447,9 +457,14 @@ fn import_node<'a, T, A: Allocator>(
 
     for branch in node.branches {
         let child = match branch.child {
-            Child::Value(value) => NodePtr::from_payload(decode(value)),
-            Child::Node(node) => {
-                let child = import_node(node, allocator, drain, decode)?;
+            Child::Value(value) => {
+                NodePtr::try_from_payload(decode(value)).ok_or(Error::InvalidPayloadTag)?
+            }
+            Child::Node(child_node) => {
+                let mut child_key = built.key.clone();
+                child_key.extend_from_slice(&node.prefix);
+                child_key.push(branch.key);
+                let child = import_node(child_node, allocator, drain, decode, child_key)?;
                 NodePtr::from_node(child.into_inner())
             }
         };
@@ -498,7 +513,7 @@ unsafe fn destroy_tree<A: Allocator>(
 mod tests {
     use core::sync::atomic::{AtomicUsize, Ordering};
     use std::alloc::Layout;
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
 
     use super::*;
     use crate::error::OOMError;
@@ -540,6 +555,44 @@ mod tests {
                 Child::Value(_) => false,
                 Child::Node(node) => contains_kind(node, expected),
             })
+    }
+
+    const HIGH_BIT_MASK: usize = 1 << (usize::BITS - 1);
+
+    fn nested_payload_topology(second: usize) -> Topology<usize> {
+        Topology {
+            version: VERSION,
+            root: Node {
+                kind: NodeKind::N4,
+                prefix: Vec::new(),
+                branches: vec![Branch {
+                    key: 0x21,
+                    slot: 0,
+                    child: Child::Node(Node {
+                        kind: NodeKind::N4,
+                        prefix: vec![1, 2, 3, 4, 5, 6],
+                        branches: vec![
+                            Branch {
+                                key: 0x10,
+                                slot: 0,
+                                child: Child::Value(1),
+                            },
+                            Branch {
+                                key: 0x11,
+                                slot: 1,
+                                child: Child::Value(second),
+                            },
+                        ],
+                        free_slots: Vec::new(),
+                    }),
+                }],
+                free_slots: Vec::new(),
+            },
+        }
+    }
+
+    fn nested_key(terminal: u8) -> usize {
+        usize::from_be_bytes([0x21, 1, 2, 3, 4, 5, 6, terminal])
     }
 
     fn assert_round_trip(count: usize, expected: NodeKind) {
@@ -632,5 +685,56 @@ mod tests {
             decoded.load(Ordering::Relaxed),
             drained.load(Ordering::Relaxed)
         );
+    }
+
+    #[test]
+    fn reserved_payload_tag_is_typed_and_partial_cleanup_keeps_full_keys() {
+        let live_bytes = Arc::new(AtomicUsize::new(0));
+        let allocator = FailingAllocator {
+            remaining: Arc::new(AtomicUsize::new(usize::MAX)),
+            live_bytes: Arc::clone(&live_bytes),
+        };
+        let decoded = Arc::new(AtomicUsize::new(0));
+        let drained = Arc::new(Mutex::new(Vec::new()));
+        let decoded_for_restore = Arc::clone(&decoded);
+        let drained_for_restore = Arc::clone(&drained);
+
+        let restored = CongeeRaw::<usize, usize, FailingAllocator>::from_topology_with_drainer(
+            nested_payload_topology(2),
+            allocator,
+            move |value| {
+                decoded_for_restore.fetch_add(1, Ordering::Relaxed);
+                if value == 1 {
+                    HIGH_BIT_MASK - 1
+                } else {
+                    HIGH_BIT_MASK
+                }
+            },
+            move |key, value| drained_for_restore.lock().unwrap().push((key, value)),
+        );
+
+        assert_eq!(restored.err(), Some(Error::InvalidPayloadTag));
+        assert_eq!(decoded.load(Ordering::Relaxed), 2);
+        assert_eq!(
+            *drained.lock().unwrap(),
+            vec![(nested_key(0x10), HIGH_BIT_MASK - 1)]
+        );
+        assert_eq!(live_bytes.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn maximum_payload_value_restores_and_is_lookupable() {
+        let restored =
+            CongeeRaw::<usize, usize>::from_topology_default(nested_payload_topology(2), |value| {
+                if value == 1 { HIGH_BIT_MASK - 1 } else { 7 }
+            })
+            .unwrap();
+        let guard = restored.pin();
+
+        assert_eq!(
+            restored.get(&nested_key(0x10), &guard),
+            Some(HIGH_BIT_MASK - 1)
+        );
+        assert_eq!(restored.get(&nested_key(0x11), &guard), Some(7));
     }
 }

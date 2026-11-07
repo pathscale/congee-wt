@@ -77,6 +77,9 @@ where
     /// let tree = CongeeRaw::<usize, usize>::default();
     /// let guard = tree.pin();
     /// ```
+    ///
+    /// Pinning can advance reclamation and run ready deferred callbacks on
+    /// the calling thread. Callback execution time is part of the call's latency.
     #[inline]
     pub fn pin(&self) -> epoch::Guard<'_> {
         self.inner.pin()
@@ -98,6 +101,8 @@ where
     /// Create an empty [Art] tree with a drainer.
     ///
     /// The drainer is called on each of the value when the tree is dropped.
+    /// Captured state must be `Send + Sync`; use synchronization for mutable
+    /// state shared by drainer calls.
     ///
     /// # Examples
     ///
@@ -123,7 +128,7 @@ where
     /// assert_eq!(deleted_key.load(std::sync::atomic::Ordering::Relaxed), 1);
     /// assert_eq!(deleted_value.load(std::sync::atomic::Ordering::Relaxed), 42);
     /// ```
-    pub fn new_with_drainer(allocator: A, drainer: impl Fn(K, V) + 'static) -> Self {
+    pub fn new_with_drainer(allocator: A, drainer: impl Fn(K, V) + Send + Sync + 'static) -> Self {
         let drainer = Arc::new(move |k: [u8; 8], v: usize| {
             drainer(K::from(usize::from_be_bytes(k)), V::from(v))
         });
