@@ -5,8 +5,9 @@ use core::ptr::NonNull;
 
 use crate::{
     Allocator, DefaultAllocator, cast_ptr,
+    congee_compact_set::NodeType as CompactNodeType,
     epoch::{self, Guard, Reclaimer},
-    error::{ArtError, OOMError},
+    error::{ArtError, CompactSetError, OOMError},
     lock::ReadGuard,
     nodes::{BaseNode, ChildIsPayload, ChildIsSubNode, Node, Node4, NodePtr, NodeType, Parent},
     range_scan::RangeScan,
@@ -16,6 +17,251 @@ use crate::{
 use core::sync::atomic::AtomicPtr;
 #[cfg(all(feature = "shuttle", test))]
 use shuttle::sync::atomic::AtomicPtr;
+
+const N256_RESIDUAL_LIMIT: i64 = i16::MAX as i64;
+const N256_ABSENT_RESIDUAL: i16 = i16::MIN;
+
+enum CompactAttemptError {
+    Contention,
+    Permanent(CompactSetError),
+}
+
+impl From<ArtError> for CompactAttemptError {
+    fn from(error: ArtError) -> Self {
+        match error {
+            ArtError::Locked | ArtError::VersionNotMatch => Self::Contention,
+            ArtError::Oom => Self::Permanent(CompactSetError::OutOfMemory),
+        }
+    }
+}
+
+impl From<CompactSetError> for CompactAttemptError {
+    fn from(error: CompactSetError) -> Self {
+        Self::Permanent(error)
+    }
+}
+
+fn compact_node_layout(
+    start: usize,
+    node_type: u8,
+    prefix_len: usize,
+    child_count: usize,
+) -> Result<(u32, usize), CompactSetError> {
+    let range_error = CompactSetError::OffsetOutOfRange;
+    let offset = u32::try_from(start).map_err(|_| range_error)?;
+    let children_size = match node_type {
+        CompactNodeType::N4_INTERNAL | CompactNodeType::N16_INTERNAL => child_count.checked_mul(5),
+        CompactNodeType::N48_INTERNAL => child_count
+            .checked_mul(4)
+            .and_then(|size| size.checked_add(36)),
+        CompactNodeType::N256_INTERNAL => Some(520),
+        CompactNodeType::N4_LEAF | CompactNodeType::N16_LEAF => Some(child_count),
+        CompactNodeType::N48_LEAF | CompactNodeType::N256_LEAF => Some(32),
+        _ => unreachable!("invalid compact node type"),
+    }
+    .ok_or(range_error)?;
+    let end = start
+        .checked_add(2)
+        .and_then(|end| end.checked_add(prefix_len))
+        .and_then(|end| end.checked_add(children_size))
+        .ok_or(range_error)?;
+    // The exclusive end can be one past the last addressable byte.
+    u32::try_from(end - 1).map_err(|_| range_error)?;
+    Ok((offset, end))
+}
+
+#[cfg(test)]
+mod compact_layout_tests {
+    use super::{
+        ArtError, CompactAttemptError, CompactNodeType, CompactSetError, compact_node_layout,
+    };
+
+    #[test]
+    fn every_layout_checks_the_last_addressable_byte() {
+        let last = u32::MAX as usize;
+        let layouts = [
+            (CompactNodeType::N4_INTERNAL, 5),
+            (CompactNodeType::N16_INTERNAL, 5),
+            (CompactNodeType::N48_INTERNAL, 40),
+            (CompactNodeType::N256_INTERNAL, 520),
+            (CompactNodeType::N4_LEAF, 1),
+            (CompactNodeType::N16_LEAF, 1),
+            (CompactNodeType::N48_LEAF, 32),
+            (CompactNodeType::N256_LEAF, 32),
+        ];
+        for (node_type, body_len) in layouts {
+            let prefix_len = 7;
+            let end = last + 1;
+            let start = end - (2 + prefix_len + body_len);
+            assert_eq!(
+                compact_node_layout(start, node_type, prefix_len, 1),
+                Ok((u32::try_from(start).unwrap(), end))
+            );
+            for invalid_start in [start + 1, end] {
+                assert_eq!(
+                    compact_node_layout(invalid_start, node_type, prefix_len, 1),
+                    Err(CompactSetError::OffsetOutOfRange)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn layout_rejects_size_arithmetic_overflow() {
+        let cases = [
+            (CompactNodeType::N4_INTERNAL, 0, usize::MAX / 5 + 1),
+            (CompactNodeType::N48_INTERNAL, 0, usize::MAX / 4),
+            (CompactNodeType::N4_LEAF, usize::MAX, 1),
+            (CompactNodeType::N4_LEAF, usize::MAX - 2, 1),
+        ];
+        for (node_type, prefix_len, child_count) in cases {
+            assert_eq!(
+                compact_node_layout(0, node_type, prefix_len, child_count),
+                Err(CompactSetError::OffsetOutOfRange)
+            );
+        }
+    }
+
+    #[test]
+    fn only_lock_and_version_errors_are_retryable() {
+        for error in [ArtError::Locked, ArtError::VersionNotMatch] {
+            assert!(matches!(
+                CompactAttemptError::from(error),
+                CompactAttemptError::Contention
+            ));
+        }
+        assert!(matches!(
+            CompactAttemptError::from(ArtError::Oom),
+            CompactAttemptError::Permanent(CompactSetError::OutOfMemory)
+        ));
+        assert!(matches!(
+            CompactAttemptError::from(CompactSetError::OffsetOutOfRange),
+            CompactAttemptError::Permanent(CompactSetError::OffsetOutOfRange)
+        ));
+    }
+}
+
+/// Select coefficients and residuals for the present N256 edges. The checked
+/// reconstruction below is also the proof that every serialized edge decodes
+/// to its original absolute offset.
+fn fit_n256_offsets(present: &[(u8, u32)]) -> Result<(u32, u32, [i16; 256]), &'static str> {
+    if present.is_empty() {
+        return Err("N256 internal node has no present children");
+    }
+
+    let min_y = present.iter().map(|&(_, y)| i64::from(y)).min().unwrap();
+    let max_y = present.iter().map(|&(_, y)| i64::from(y)).max().unwrap();
+    let x_max = present.iter().map(|&(x, _)| i64::from(x)).max().unwrap();
+    let delta = max_y - min_y;
+
+    let old_slope = delta / 255;
+    let fit = match fit_n256_intercept(present, x_max, old_slope) {
+        Some(fit) => fit,
+        None => {
+            // The reduced secant slope retains monotonic predictions while
+            // leaving room for the signed residuals on both sides.
+            let fallback_slope = (7 * delta) / (8 * 255);
+            fit_n256_intercept(present, x_max, fallback_slope)
+                .ok_or("N256 v2 fallback slope could not represent all offsets")?
+        }
+    };
+    let (slope, intercept_lo, intercept_hi) = fit;
+
+    let intercept = min_y.clamp(intercept_lo, intercept_hi);
+    let slope_u32 = u32::try_from(slope).map_err(|_| "N256 slope is outside u32")?;
+    let intercept_u32 = u32::try_from(intercept).map_err(|_| "N256 intercept is outside u32")?;
+    let mut residuals = [N256_ABSENT_RESIDUAL; 256];
+
+    for &(x, y) in present {
+        let prediction = slope
+            .checked_mul(i64::from(x))
+            .and_then(|value| value.checked_add(intercept))
+            .ok_or("N256 prediction arithmetic overflow")?;
+        let residual_i16 = checked_n256_residual(i64::from(y), prediction)?;
+        let reconstructed = prediction
+            .checked_add(i64::from(residual_i16))
+            .ok_or("N256 reconstruction arithmetic overflow")?;
+        if reconstructed != i64::from(y)
+            || !(0..=i64::from(u32::MAX)).contains(&prediction)
+            || !(0..=i64::from(u32::MAX)).contains(&reconstructed)
+        {
+            return Err("N256 edge does not reproduce its v2 offset");
+        }
+        residuals[usize::from(x)] = residual_i16;
+    }
+
+    Ok((slope_u32, intercept_u32, residuals))
+}
+
+fn checked_n256_residual(y: i64, prediction: i64) -> Result<i16, &'static str> {
+    let residual = y
+        .checked_sub(prediction)
+        .ok_or("N256 residual arithmetic overflow")?;
+    if !(-N256_RESIDUAL_LIMIT..=N256_RESIDUAL_LIMIT).contains(&residual) {
+        return Err("present N256 edge residual is not representable");
+    }
+    let residual_i16 = i16::try_from(residual).map_err(|_| "N256 residual is outside i16")?;
+    if residual_i16 == N256_ABSENT_RESIDUAL {
+        return Err("present N256 edge collides with absence sentinel");
+    }
+    Ok(residual_i16)
+}
+
+fn fit_n256_intercept(present: &[(u8, u32)], x_max: i64, slope: i64) -> Option<(i64, i64, i64)> {
+    let unsigned_max = i64::from(u32::MAX);
+    let mut lo = 0i64;
+    let mut hi = unsigned_max.checked_sub(slope.checked_mul(x_max)?)?;
+
+    for &(x, y) in present {
+        let x = i64::from(x);
+        let y = i64::from(y);
+        let prediction_base = slope.checked_mul(x)?;
+        lo = lo.max(
+            y.checked_sub(prediction_base)?
+                .checked_sub(N256_RESIDUAL_LIMIT)?,
+        );
+        hi = hi.min(
+            y.checked_sub(prediction_base)?
+                .checked_add(N256_RESIDUAL_LIMIT)?,
+        );
+    }
+
+    (lo <= hi).then_some((slope, lo, hi))
+}
+
+#[cfg(test)]
+mod n256_fitting_tests {
+    use super::{N256_ABSENT_RESIDUAL, checked_n256_residual, fit_n256_offsets};
+
+    #[test]
+    fn residual_bounds_exclude_the_reserved_sentinel() {
+        assert_eq!(checked_n256_residual(32_767, 0).unwrap(), 32_767);
+        assert_eq!(checked_n256_residual(0, 32_767).unwrap(), -32_767);
+        assert!(checked_n256_residual(32_768, 0).is_err());
+        assert!(checked_n256_residual(0, 32_768).is_err());
+        assert_ne!(32_767i16, N256_ABSENT_RESIDUAL);
+        assert_ne!(-32_767i16, N256_ABSENT_RESIDUAL);
+    }
+
+    #[test]
+    fn sparse_single_and_near_u32_max_offsets_reconstruct_exactly() {
+        let cases: &[&[(u8, u32)]] = &[
+            &[(42, 17)],
+            &[(3, 0), (250, 100)],
+            &[(3, u32::MAX - 100), (250, u32::MAX)],
+            &[(0, 522), (128, 67_338), (255, 68_481)],
+        ];
+        for present in cases {
+            let (slope, intercept, residuals) = fit_n256_offsets(present).unwrap();
+            for &(x, y) in *present {
+                let prediction = i64::from(slope) * i64::from(x) + i64::from(intercept);
+                let residual = residuals[usize::from(x)];
+                assert_ne!(residual, N256_ABSENT_RESIDUAL);
+                assert_eq!(prediction + i64::from(residual), i64::from(y));
+            }
+        }
+    }
+}
 
 /// Raw interface to the ART tree.
 /// The `Art` is a wrapper around the `RawArt` that provides a safe interface.
@@ -101,7 +347,10 @@ impl<const K_LEN: usize, A: Allocator + Clone + Send> Drop for CongeeInner<K_LEN
 }
 
 impl<const K_LEN: usize, A: Allocator + Clone + Send> CongeeInner<K_LEN, A> {
-    pub fn new(allocator: A, drain_callback: Arc<dyn Fn([u8; K_LEN], usize) + Send + Sync>) -> Self {
+    pub fn new(
+        allocator: A,
+        drain_callback: Arc<dyn Fn([u8; K_LEN], usize) + Send + Sync>,
+    ) -> Self {
         let root = BaseNode::make_node::<Node4, A>(&[], &allocator)
             .expect("Can't allocate memory for root node!");
         CongeeInner {
@@ -664,18 +913,18 @@ impl<const K_LEN: usize, A: Allocator + Clone + Send> CongeeInner<K_LEN, A> {
         &self.allocator
     }
 
-    pub(crate) fn to_compact_set(&self) -> Vec<u8> {
+    pub(crate) fn try_to_compact_set(&self) -> Result<Vec<u8>, CompactSetError> {
         let backoff = Backoff::new();
         loop {
-            match self.try_to_compact_set() {
-                Ok(bytes) => return bytes,
-                Err(_) => backoff.spin(),
+            match self.compact_set_attempt() {
+                Ok(bytes) => return Ok(bytes),
+                Err(CompactAttemptError::Contention) => backoff.spin(),
+                Err(CompactAttemptError::Permanent(error)) => return Err(error),
             }
         }
     }
 
-    fn try_to_compact_set(&self) -> Result<Vec<u8>, ArtError> {
-        use crate::congee_compact_set::NodeType as CompactNodeType;
+    fn compact_set_attempt(&self) -> Result<Vec<u8>, CompactAttemptError> {
         use alloc::collections::VecDeque;
 
         let _pin = self.pin();
@@ -698,14 +947,14 @@ impl<const K_LEN: usize, A: Allocator + Clone + Send> CongeeInner<K_LEN, A> {
         // First pass: collect all nodes and assign indices
         let mut nodes_data = Vec::new();
         let mut versions = Vec::new();
-        let mut node_counter = 0u32;
+        let mut node_counter = 0usize;
 
         while let Some(node_ptr) = queue.pop_front() {
             let node = BaseNode::read_lock(node_ptr)?;
             let node_prefix = node.as_ref().prefix().to_vec();
 
             // Collect children data first to identify node type and count
-            let mut children: Vec<(u8, Option<u32>)> = Vec::new();
+            let mut children: Vec<(u8, Option<usize>)> = Vec::new();
             let mut is_leaf = false;
 
             for (key, child_ptr) in node.as_ref().get_children(0, 255) {
@@ -716,7 +965,9 @@ impl<const K_LEN: usize, A: Allocator + Clone + Send> CongeeInner<K_LEN, A> {
                     },
                     SubNode(sub_node) => {
                         // Assign the next available node index
-                        node_counter += 1;
+                        node_counter = node_counter
+                            .checked_add(1)
+                            .ok_or(CompactSetError::OffsetOutOfRange)?;
                         children.push((key, Some(node_counter)));
                         queue.push_back(sub_node);
                     }
@@ -751,9 +1002,7 @@ impl<const K_LEN: usize, A: Allocator + Clone + Send> CongeeInner<K_LEN, A> {
             .collect::<Vec<_>>();
         for index in (0..nodes_data.len()).rev() {
             nodes_data[index].2.retain(|(_, child_index)| {
-                child_index.map_or(true, |child_index| {
-                    !empty_nodes[child_index as usize]
-                })
+                child_index.is_none_or(|child_index| !empty_nodes[child_index])
             });
             empty_nodes[index] = nodes_data[index].2.is_empty();
         }
@@ -771,21 +1020,14 @@ impl<const K_LEN: usize, A: Allocator + Clone + Send> CongeeInner<K_LEN, A> {
             if empty_nodes[index] {
                 continue;
             }
-            node_offsets[index] = Some(current_offset);
-
-            // Calculate node size: header + prefix + children
-            let header_size = 2;
-            let prefix_size = node_prefix.len();
-            let children_size = match *node_type {
-                CompactNodeType::N48_INTERNAL => 36 + children.len() * 4, // precomputed (4) + bitmap (32) + child offsets
-                CompactNodeType::N48_LEAF => 32,                          // presence array only
-                CompactNodeType::N256_INTERNAL => 8 + 256 * 2, // slope + intercept + differences
-                CompactNodeType::N256_LEAF => 32,              // presence array
-                CompactNodeType::N4_LEAF | CompactNodeType::N16_LEAF => children.len(), // keys only
-                _ => children.len() * 5,                       // key + offset pairs
-            };
-
-            current_offset += header_size + prefix_size + children_size;
+            let (offset, end) = compact_node_layout(
+                current_offset,
+                *node_type,
+                node_prefix.len(),
+                children.len(),
+            )?;
+            node_offsets[index] = Some(offset);
+            current_offset = end;
         }
 
         // Second pass: serialize all nodes, replace indices with actual offsets
@@ -817,9 +1059,7 @@ impl<const K_LEN: usize, A: Allocator + Clone + Send> CongeeInner<K_LEN, A> {
                     for (key, node_index_opt) in children {
                         set_bit(&mut bitmap, key); // Set bit for this key
                         let offset = if let Some(idx) = node_index_opt {
-                            node_offsets[idx as usize]
-                                .expect("surviving child has an assigned offset")
-                                as u32
+                            node_offsets[idx].expect("surviving child has an assigned offset")
                         } else {
                             panic!("Offset should not be None for internal nodes");
                         };
@@ -859,47 +1099,33 @@ impl<const K_LEN: usize, A: Allocator + Clone + Send> CongeeInner<K_LEN, A> {
                     // N256 Internal: Uses the concept of straight lines to compress the offsets.
                     // The line is defined by a slope and intercept. The difference is the actual offset minus the predicted offset.
                     // [slope: u32][intercept: u32][differences: 256 * i16]
-                    let mut direct_children = [0u32; 256];
+                    let mut direct_children = [None; 256];
 
                     for (key, node_index_opt) in children {
                         let offset = if let Some(idx) = node_index_opt {
-                            node_offsets[idx as usize]
-                                .expect("surviving child has an assigned offset")
-                                as u32
+                            node_offsets[idx].expect("surviving child has an assigned offset")
                         } else {
                             panic!("Offset should not be None for internal nodes");
                         };
-                        direct_children[key as usize] = offset;
+                        direct_children[key as usize] = Some(offset);
                     }
 
-                    // Calculate linear compression parameters
-                    let non_zero_offsets: Vec<u32> = direct_children
+                    let present: Vec<(u8, u32)> = direct_children
                         .iter()
-                        .filter(|&x| *x != 0)
-                        .cloned()
+                        .enumerate()
+                        .filter_map(|(key, offset)| offset.map(|offset| (key as u8, offset)))
                         .collect();
 
-                    let min_offset = *non_zero_offsets.iter().min().unwrap();
-                    let max_offset = *non_zero_offsets.iter().max().unwrap();
-
-                    let slope = (max_offset - min_offset) / 255;
-                    let intercept = min_offset;
+                    let (slope, intercept, residuals) =
+                        fit_n256_offsets(&present).map_err(CompactSetError::N256Encoding)?;
 
                     // Write slope and intercept
                     buf.extend_from_slice(&slope.to_le_bytes());
                     buf.extend_from_slice(&intercept.to_le_bytes());
 
-                    // Calculate and write difference array
-                    // Use i16::MIN as sentinel value for "no child"
-                    for (i, child) in direct_children.iter().enumerate() {
-                        let difference = if *child != 0 {
-                            let predicted = slope * i as u32 + intercept;
-                            let diff = *child as i32 - predicted as i32;
-                            diff as i16
-                        } else {
-                            i16::MIN
-                        };
-                        buf.extend_from_slice(&difference.to_le_bytes());
+                    // Only absent children receive the reserved i16::MIN value.
+                    for residual in residuals {
+                        buf.extend_from_slice(&residual.to_le_bytes());
                     }
                 }
                 CompactNodeType::N256_LEAF => {
@@ -929,9 +1155,7 @@ impl<const K_LEN: usize, A: Allocator + Clone + Send> CongeeInner<K_LEN, A> {
                         }
                         for (_, node_index_opt) in children {
                             let offset = if let Some(idx) = node_index_opt {
-                                node_offsets[idx as usize]
-                                    .expect("surviving child has an assigned offset")
-                                    as u32
+                                node_offsets[idx].expect("surviving child has an assigned offset")
                             } else {
                                 panic!("Offset should not be None for internal nodes");
                             };

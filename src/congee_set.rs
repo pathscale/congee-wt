@@ -3,7 +3,9 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::marker::PhantomData;
 
-use crate::{Allocator, CongeeInner, DefaultAllocator, epoch, error::OOMError, stats};
+use crate::{
+    Allocator, CompactSetError, CongeeInner, DefaultAllocator, epoch, error::OOMError, stats,
+};
 
 /// A concurrent set-like data structure implemented using an adaptive radix tree.
 pub struct CongeeSet<
@@ -278,9 +280,27 @@ where
         self.inner.allocator()
     }
 
-    /// Serializes the current tree into a compact v2 binary format
+    /// Serializes the current tree into the compact v2 binary format.
+    ///
+    /// # Panics
+    ///
+    /// Panics if snapshot encoding fails. Use [Self::try_to_compact_set] to
+    /// handle encoding errors.
     pub fn to_compact_set(&self) -> Vec<u8> {
-        self.inner.to_compact_set()
+        self.try_to_compact_set()
+            .unwrap_or_else(|error| panic!("permanent compact encoding error: {error}"))
+    }
+
+    /// Serializes the current tree into the compact v2 binary format.
+    ///
+    /// Retries when a concurrent mutation invalidates the snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the snapshot exceeds the v2 offset range, its
+    /// offsets cannot be encoded, or the tree reports an allocation failure.
+    pub fn try_to_compact_set(&self) -> Result<Vec<u8>, CompactSetError> {
+        self.inner.try_to_compact_set()
     }
 }
 
