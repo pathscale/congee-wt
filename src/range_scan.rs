@@ -41,10 +41,6 @@ impl<'a, const K_LEN: usize> RangeScan<'a, K_LEN> {
         }
     }
 
-    pub(crate) fn is_valid_key_pair(&self) -> bool {
-        self.start < self.end
-    }
-
     fn key_in_range(&self, key: &LastLevelKey<K_LEN>) -> bool {
         self.start <= key.key() && key.key() < self.end
     }
