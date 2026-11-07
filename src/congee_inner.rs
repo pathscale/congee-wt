@@ -724,9 +724,6 @@ impl<const K_LEN: usize, A: Allocator + Clone + Send> CongeeInner<K_LEN, A> {
             }
 
             node.check_version()?;
-            if children.is_empty() {
-                return Err(ArtError::VersionNotMatch);
-            }
             // Determine node type based on base node type and whether it's a leaf
             let node_type = match (node.as_ref().get_type(), is_leaf) {
                 (NodeType::N4, false) => CompactNodeType::N4_INTERNAL,
@@ -746,12 +743,35 @@ impl<const K_LEN: usize, A: Allocator + Clone + Send> CongeeInner<K_LEN, A> {
         for version in &versions {
             version.check_version()?;
         }
-        // Calculate all node offsets first
-        let mut node_offsets = Vec::new();
+
+        // Prune empty subtrees from the leaves up, after validating every visited node.
+        let mut empty_nodes = nodes_data
+            .iter()
+            .map(|(_, _, children, _)| children.is_empty())
+            .collect::<Vec<_>>();
+        for index in (0..nodes_data.len()).rev() {
+            nodes_data[index].2.retain(|(_, child_index)| {
+                child_index.map_or(true, |child_index| {
+                    !empty_nodes[child_index as usize]
+                })
+            });
+            empty_nodes[index] = nodes_data[index].2.is_empty();
+        }
+
+        // The root becoming empty represents an empty compact set.
+        if empty_nodes[0] {
+            return Ok(buf);
+        }
+
+        // Calculate offsets for surviving nodes while keeping their breadth-first order.
+        let mut node_offsets = vec![None; nodes_data.len()];
         let mut current_offset = 0usize;
 
-        for (node_type, node_prefix, children, _is_leaf) in &nodes_data {
-            node_offsets.push(current_offset);
+        for (index, (node_type, node_prefix, children, _is_leaf)) in nodes_data.iter().enumerate() {
+            if empty_nodes[index] {
+                continue;
+            }
+            node_offsets[index] = Some(current_offset);
 
             // Calculate node size: header + prefix + children
             let header_size = 2;
@@ -769,7 +789,12 @@ impl<const K_LEN: usize, A: Allocator + Clone + Send> CongeeInner<K_LEN, A> {
         }
 
         // Second pass: serialize all nodes, replace indices with actual offsets
-        for (node_type, node_prefix, children, is_leaf) in nodes_data.into_iter() {
+        for (index, (node_type, node_prefix, children, is_leaf)) in
+            nodes_data.into_iter().enumerate()
+        {
+            if empty_nodes[index] {
+                continue;
+            }
             // Write node header
             use crate::congee_compact_set::NodeHeader;
             let type_and_prefix =
@@ -792,7 +817,9 @@ impl<const K_LEN: usize, A: Allocator + Clone + Send> CongeeInner<K_LEN, A> {
                     for (key, node_index_opt) in children {
                         set_bit(&mut bitmap, key); // Set bit for this key
                         let offset = if let Some(idx) = node_index_opt {
-                            node_offsets[idx as usize] as u32
+                            node_offsets[idx as usize]
+                                .expect("surviving child has an assigned offset")
+                                as u32
                         } else {
                             panic!("Offset should not be None for internal nodes");
                         };
@@ -836,7 +863,9 @@ impl<const K_LEN: usize, A: Allocator + Clone + Send> CongeeInner<K_LEN, A> {
 
                     for (key, node_index_opt) in children {
                         let offset = if let Some(idx) = node_index_opt {
-                            node_offsets[idx as usize] as u32
+                            node_offsets[idx as usize]
+                                .expect("surviving child has an assigned offset")
+                                as u32
                         } else {
                             panic!("Offset should not be None for internal nodes");
                         };
@@ -900,7 +929,9 @@ impl<const K_LEN: usize, A: Allocator + Clone + Send> CongeeInner<K_LEN, A> {
                         }
                         for (_, node_index_opt) in children {
                             let offset = if let Some(idx) = node_index_opt {
-                                node_offsets[idx as usize] as u32
+                                node_offsets[idx as usize]
+                                    .expect("surviving child has an assigned offset")
+                                    as u32
                             } else {
                                 panic!("Offset should not be None for internal nodes");
                             };
