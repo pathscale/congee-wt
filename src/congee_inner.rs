@@ -764,7 +764,7 @@ impl<const K_LEN: usize, A: Allocator + Clone + Send> CongeeInner<K_LEN, A> {
         }
 
         // Calculate offsets for surviving nodes while keeping their breadth-first order.
-        let mut node_offsets = vec![None; nodes_data.len()];
+        let mut node_offsets = alloc::vec![None; nodes_data.len()];
         let mut current_offset = 0usize;
 
         for (index, (node_type, node_prefix, children, _is_leaf)) in nodes_data.iter().enumerate() {
