@@ -108,6 +108,13 @@ impl NodeHeader {
     }
 }
 
+struct CheckedNode<'a> {
+    header: NodeHeader,
+    prefix: &'a [u8],
+    body: &'a [u8],
+    body_end: usize,
+}
+
 #[derive(Default, Debug, Clone)]
 pub struct CompactSetStats {
     pub total_data_size: usize,
@@ -476,7 +483,7 @@ where
 
     // Inspection APIs consume untrusted serialized bytes. Keep their traversal bounded
     // by validating the complete node layout before exposing any of its slices.
-    fn checked_node_at(&self, offset: usize) -> Option<(NodeHeader, &[u8], usize)> {
+    fn checked_node_at(&self, offset: usize) -> Option<CheckedNode<'_>> {
         let header_bytes = self.data.get(offset..offset.checked_add(2)?)?;
         let header = NodeHeader {
             type_and_prefix: header_bytes[0],
@@ -504,9 +511,27 @@ where
             NodeType::N48_LEAF | NodeType::N256_LEAF => 32,
             _ => return None,
         };
-        let end = prefix_end.checked_add(child_size)?;
-        self.data.get(offset..end)?;
-        Some((header, prefix, end))
+        let body_end = prefix_end.checked_add(child_size)?;
+        let body = self.data.get(prefix_end..body_end)?;
+
+        let bitmap = match kind {
+            NodeType::N48_INTERNAL => body.get(4..36),
+            NodeType::N48_LEAF | NodeType::N256_LEAF => body.get(..32),
+            _ => None,
+        };
+        if let Some(bitmap) = bitmap {
+            let population: usize = bitmap.iter().map(|byte| byte.count_ones() as usize).sum();
+            if population != count {
+                return None;
+            }
+        }
+
+        Some(CheckedNode {
+            header,
+            prefix,
+            body,
+            body_end,
+        })
     }
 
     #[cfg(target_arch = "x86_64")]
@@ -592,24 +617,15 @@ where
     fn contains_checked(&self, input_key: &K) -> Option<bool> {
         let key_usize: usize = (*input_key).into();
         let key = key_usize.to_be_bytes();
-        let read_u32 = |at: usize| -> Option<u32> {
-            let bytes = self.data.get(at..at.checked_add(4)?)?;
-            Some(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
-        };
         let mut offset = 0usize;
         let mut level = 0usize;
         for _ in 0..8 {
-            let header = self.data.get(offset..offset.checked_add(2)?)?;
-            if header[0] & 0xc0 != 0 {
-                return None;
-            }
-            let kind = header[0] & 7;
-            let prefix_len = <usize as From<u8>>::from((header[0] >> 3) & 7);
-            let count = <usize as From<u8>>::from(header[1]) + 1;
-            let prefix = offset.checked_add(2)?;
-            let children = prefix.checked_add(prefix_len)?;
+            let frame = self.checked_node_at(offset)?;
+            let kind = frame.header.node_type();
+            let count = frame.header.children_len();
+            let prefix_len = frame.prefix.len();
             let next_level = level.checked_add(prefix_len)?;
-            if self.data.get(prefix..children)? != key.get(level..next_level)? {
+            if frame.prefix != key.get(level..next_level)? {
                 return Some(false);
             }
             level = next_level;
@@ -657,26 +673,24 @@ where
 
             let next = match kind {
                 0 | 1 | 4 | 5 => {
-                    let capacity = if kind == 0 || kind == 4 { 4 } else { 16 };
-                    if count > capacity {
-                        return None;
-                    }
-                    let keys_end = children.checked_add(count)?;
-                    let keys = self.data.get(children..keys_end)?;
+                    let keys_end = count;
+                    let keys = frame.body.get(..keys_end)?;
                     let Some(index) = keys.iter().position(|value| *value == byte) else {
                         return Some(false);
                     };
                     if leaf {
                         return Some(level + 1 == key.len());
                     }
-                    read_u32(keys_end.checked_add(index.checked_mul(4)?)?)? as usize
+                    let at = keys_end.checked_add(index.checked_mul(4)?)?;
+                    let bytes = frame.body.get(at..at.checked_add(4)?)?;
+                    u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize
                 }
                 2 | 6 | 7 => {
-                    if (kind == 2 || kind == 6) && count > 48 {
-                        return None;
-                    }
-                    let bitmap_at = children.checked_add(if kind == 2 { 4 } else { 0 })?;
-                    let bitmap = self.data.get(bitmap_at..bitmap_at.checked_add(32)?)?;
+                    let bitmap = if kind == 2 {
+                        frame.body.get(4..36)?
+                    } else {
+                        frame.body.get(..32)?
+                    };
                     let slot = <usize as From<u8>>::from(byte) / 8;
                     let bit = byte % 8;
                     if bitmap[slot] & (1u8 << bit) == 0 {
@@ -693,29 +707,45 @@ where
                     if rank >= count {
                         return None;
                     }
-                    let offsets = children.checked_add(36)?;
-                    read_u32(offsets.checked_add(rank.checked_mul(4)?)?)? as usize
+                    let at = 36usize.checked_add(rank.checked_mul(4)?)?;
+                    let bytes = frame.body.get(at..at.checked_add(4)?)?;
+                    u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize
                 }
                 3 => {
-                    let diff_at = children
-                        .checked_add(8)?
-                        .checked_add(<usize as From<u8>>::from(byte) * 2)?;
-                    let bytes = self.data.get(diff_at..diff_at.checked_add(2)?)?;
+                    let diff_at = 8usize.checked_add(<usize as From<u8>>::from(byte) * 2)?;
+                    let bytes = frame.body.get(diff_at..diff_at.checked_add(2)?)?;
                     let difference = i16::from_le_bytes([bytes[0], bytes[1]]);
                     if difference == i16::MIN {
                         return Some(false);
                     }
-                    let slope = read_u32(children)?;
-                    let intercept = read_u32(children.checked_add(4)?)?;
+                    let slope_bytes = frame.body.get(..4)?;
+                    let intercept_bytes = frame.body.get(4..8)?;
+                    let slope = u32::from_le_bytes([
+                        slope_bytes[0],
+                        slope_bytes[1],
+                        slope_bytes[2],
+                        slope_bytes[3],
+                    ]);
+                    let intercept = u32::from_le_bytes([
+                        intercept_bytes[0],
+                        intercept_bytes[1],
+                        intercept_bytes[2],
+                        intercept_bytes[3],
+                    ]);
                     let predicted = slope.checked_mul(u32::from(byte))?.checked_add(intercept)?;
-                    usize::try_from(i64::from(predicted) + i64::from(difference)).ok()?
+                    let selected = i64::from(predicted) + i64::from(difference);
+                    if !(0..=i64::from(u32::MAX)).contains(&selected) {
+                        return None;
+                    }
+                    usize::try_from(selected).ok()?
                 }
                 _ => return None,
             };
-            if next == 0 {
-                return Some(level + 1 == key.len());
-            }
-            if next <= offset || next >= self.data.len() {
+            if level + 1 >= key.len()
+                || next <= offset
+                || next < frame.body_end
+                || next >= self.data.len()
+            {
                 return None;
             }
             offset = next;
@@ -735,21 +765,21 @@ where
         let mut node_index = 0;
         let mut offset = 0;
 
-        while let Some((header, prefix, end)) = self.checked_node_at(offset) {
-            let children_len = header.children_len();
+        while let Some(frame) = self.checked_node_at(offset) {
+            let children_len = frame.header.children_len();
 
             println!(
                 "Node[{}] @ offset {}: type={}, prefix={:?}, children={}",
                 node_index,
                 offset,
-                header.node_type(),
-                prefix,
+                frame.header.node_type(),
+                frame.prefix,
                 children_len
             );
 
             println!("  -> {children_len} children");
 
-            offset = end;
+            offset = frame.body_end;
             node_index += 1;
         }
 
@@ -760,9 +790,9 @@ where
         let mut count = 0;
         let mut offset = 0;
 
-        while let Some((_, _, end)) = self.checked_node_at(offset) {
+        while let Some(frame) = self.checked_node_at(offset) {
             count += 1;
-            offset = end;
+            offset = frame.body_end;
         }
 
         count
@@ -817,14 +847,14 @@ where
         };
 
         let mut offset = 0;
-        while let Some((header, prefix, end)) = self.checked_node_at(offset) {
-            let children_len = header.children_len();
+        while let Some(frame) = self.checked_node_at(offset) {
+            let children_len = frame.header.children_len();
 
             stats.header_bytes += 2;
 
-            stats.prefix_bytes += prefix.len();
+            stats.prefix_bytes += frame.prefix.len();
 
-            match header.node_type() {
+            match frame.header.node_type() {
                 NodeType::N4_LEAF => {
                     stats.n4_leaf_count += 1;
                     stats.children_bytes += children_len; // 1 byte per child
@@ -869,13 +899,13 @@ where
             }
 
             if matches!(
-                header.node_type(),
+                frame.header.node_type(),
                 NodeType::N4_LEAF | NodeType::N16_LEAF | NodeType::N48_LEAF | NodeType::N256_LEAF
             ) {
                 stats.kv_pairs += children_len;
             }
 
-            offset = end;
+            offset = frame.body_end;
         }
 
         #[cfg(feature = "access-stats")]
