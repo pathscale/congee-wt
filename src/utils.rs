@@ -392,6 +392,7 @@ pub fn compute_precomputed_popcounts(bits: &[u8; 32]) -> [u8; 4] {
 }
 
 /// Count ones up to position using precomputed values for O(1) lookup
+#[cfg(test)]
 pub fn count_ones_up_to_precomputed(precomputed: &[u8; 4], bits: &[u8; 32], pos: u8) -> usize {
     if pos == 0 {
         return 0;
@@ -426,6 +427,7 @@ pub fn count_ones_up_to_precomputed(precomputed: &[u8; 4], bits: &[u8; 32], pos:
     }
 }
 
+#[cfg(test)]
 fn count_bits_in_range(bytes: &[u8], start_bit: usize, end_bit: usize) -> usize {
     if start_bit >= end_bit {
         return 0;
@@ -476,6 +478,7 @@ pub fn set_bit(bits: &mut [u8; 32], pos: u8) {
 }
 
 /// Check if a bit is set at the given position in a 256-bit array
+#[cfg(test)]
 #[inline]
 pub fn is_bit_set(bits: &[u8; 32], pos: u8) -> bool {
     let byte_idx = pos as usize / 8;
