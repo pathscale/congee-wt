@@ -17,11 +17,11 @@ jobs:
     runs-on: ubicloud-standard-4
     timeout-minutes: 30
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       with:
         persist-credentials: false
     - name: Setup toolchain
-      uses: dtolnay/rust-toolchain@v1
+      uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
       with:
         toolchain: stable
         components: rustfmt, clippy
@@ -32,13 +32,13 @@ jobs:
     runs-on: ubicloud-standard-2
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           targets: x86_64-pc-windows-gnu
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       - run: sh scripts/check-no-std.sh -p congee-wt --lib --no-default-features
       - run: NO_STD_TARGET=x86_64-pc-windows-gnu sh scripts/check-no-std.sh -p congee-wt --lib --no-default-features
 
@@ -46,11 +46,11 @@ jobs:
     runs-on: ubicloud-standard-4
     timeout-minutes: 30
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       with:
         persist-credentials: false
     - name: Setup toolchain
-      uses: dtolnay/rust-toolchain@v1
+      uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
       with:
         toolchain: stable
         components: rustfmt, clippy
@@ -62,11 +62,11 @@ jobs:
     runs-on: ubicloud-standard-4
     timeout-minutes: 30
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       with:
         persist-credentials: false
     - name: Setup toolchain
-      uses: dtolnay/rust-toolchain@v1
+      uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
       with:
         toolchain: nightly
         components: rust-src
@@ -88,11 +88,11 @@ jobs:
     runs-on: ubicloud-standard-4
     timeout-minutes: 30
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       with:
         persist-credentials: false
     - name: Setup toolchain
-      uses: dtolnay/rust-toolchain@v1
+      uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
       with:
         toolchain: nightly
         components: rust-src
@@ -113,24 +113,24 @@ jobs:
     runs-on: ubicloud-standard-4
     timeout-minutes: 30
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       with:
         persist-credentials: false
     - name: Setup toolchain
-      uses: dtolnay/rust-toolchain@v1
+      uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
       with:
         toolchain: stable
         components: rust-src
     - name: Run benchmark
       run: env SHUMAI_FILTER="ci" cargo bench --bench basic
-    - uses: actions/upload-artifact@v4
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
         name: shumai-results 
         path: target/benchmark/**/*.json
     - name: Convert benchmark output
       run: python3 .github/workflows/shumai_converter.py
     - name: Store benchmark result
-      uses: benchmark-action/github-action-benchmark@v1
+      uses: benchmark-action/github-action-benchmark@4322e5726e6334590d251fc4f92bec0efafc45dc # v1
       with:
         name: 'Congee basic op performance'
         tool: 'customBiggerIsBetter'
@@ -149,16 +149,16 @@ jobs:
       matrix:
         target: [btree_check, compact_set_check]
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       with:
         persist-credentials: false
     - name: Setup toolchain
-      uses: dtolnay/rust-toolchain@v1
+      uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
       with:
         toolchain: nightly
         components: rust-src, llvm-tools-preview
     - name: Install cargo-fuzz
-      run: cargo install cargo-fuzz
+      run: cargo install cargo-fuzz --version 0.13.2 --locked
     - name: Ensure fresh corpus
       run: rm -rf fuzz/corpus/${{ matrix.target }} || true
     - name: Run fuzzing (${{ matrix.target }})
