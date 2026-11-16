@@ -9,7 +9,8 @@ enum Op {
     Insert { key: usize },
 }
 
-fuzz_target!(|(ops, hostile, key): (Vec<Op>, Vec<u8>, usize)| {
+fuzz_target!(|input: (Vec<Op>, Vec<u8>, usize)| {
+    let (ops, hostile, key) = input;
     let untrusted = CongeeCompactSet::<usize>::new(&hostile);
     let _ = untrusted.contains(&key);
     let set = CongeeSet::<usize>::default();
