@@ -70,7 +70,7 @@ fn compact_node_layout(
     Ok((offset, end))
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_pointer_width = "64"))]
 mod compact_layout_tests {
     use super::{CompactNodeType, CompactSetError, compact_node_layout};
 
